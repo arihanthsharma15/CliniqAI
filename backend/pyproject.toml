@@ -1,0 +1,19 @@
+[project]
+name = "ai-clinic-call-assistant"
+version = "0.1.0"
+description = "FastAPI backend for the AI Clinic Call Assistant"
+requires-python = ">=3.11"
+
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pydantic-settings",
+  "sqlalchemy",
+  "psycopg2-binary",
+  "alembic",
+  "python-multipart",
+  "httpx",
+]
+
+[tool.uvicorn]
+app = "app.main:app"
