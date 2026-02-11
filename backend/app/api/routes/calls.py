@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.config import settings
-from app.core.twiml import gather_speech, say_and_gather, say_and_hangup
+from app.core.twiml import gather_speech, hold_then_hangup, say_and_gather, say_and_hangup
 from app.models.call import Call
 from app.models.escalation import Escalation
 from app.models.task import Task
@@ -24,7 +24,12 @@ FAILED_TURN_COUNTER: dict[str, int] = {}
 AI_FAILURE_COUNTER: dict[str, int] = {}
 
 EMERGENCY_PATTERN = re.compile(
-    r"\b(chest pain|can't breathe|cannot breathe|bleeding|unconscious|suicide|ambulance|emergency)\b",
+    r"\b("
+    r"chest\s*(pain|tightness|pressure)|"
+    r"can't\s*breathe|cannot\s*breathe|can\s*not\s*breathe|"
+    r"cannot\s*breath|can't\s*breath|trouble\s*breathing|"
+    r"bleeding|unconscious|suicide|ambulance|emergency"
+    r")\b",
     re.IGNORECASE,
 )
 HUMAN_REQUEST_PATTERN = re.compile(
@@ -104,6 +109,82 @@ def _escalation_reason(text: str, failed_turns: int) -> str | None:
     return None
 
 
+def _immediate_escalation_reason(text: str) -> str | None:
+    if EMERGENCY_PATTERN.search(text):
+        return "medical_emergency_keyword"
+    if HUMAN_REQUEST_PATTERN.search(text):
+        return "requested_human"
+    return None
+
+
+def _load_task_details(raw: str | None) -> dict[str, object]:
+    try:
+        parsed = json.loads(raw) if raw else {}
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    return {"raw_request": raw or "", "extracted": {}}
+
+
+def _create_or_update_intent_task(
+    db: Session,
+    call_sid: str,
+    from_number: str | None,
+    request_type: str,
+    transcript_text: str,
+    extracted: dict[str, str],
+) -> None:
+    if request_type == "other":
+        return
+
+    matching_task = (
+        db.query(Task)
+        .filter(
+            Task.call_sid == call_sid,
+            Task.status == "pending",
+            Task.request_type == request_type,
+        )
+        .first()
+    )
+
+    if not matching_task:
+        db.add(
+            Task(
+                call_sid=call_sid,
+                patient_name=extracted.get("patient_name"),
+                callback_number=from_number,
+                request_type=request_type,
+                priority="normal",
+                details=json.dumps(
+                    {
+                        "raw_request": transcript_text,
+                        "notes": [transcript_text],
+                        "extracted": extracted,
+                    }
+                ),
+            )
+        )
+        return
+
+    details = _load_task_details(matching_task.details)
+    notes = details.get("notes", [])
+    if not isinstance(notes, list):
+        notes = []
+    notes.append(transcript_text)
+    details["notes"] = notes[-10:]
+
+    existing_extracted = details.get("extracted", {})
+    if not isinstance(existing_extracted, dict):
+        existing_extracted = {}
+    if request_type == "appointment_scheduling":
+        existing_extracted = _merge_extracted(existing_extracted, extracted)
+        if extracted.get("patient_name"):
+            matching_task.patient_name = extracted["patient_name"]
+    details["extracted"] = existing_extracted
+    matching_task.details = json.dumps(details)
+
+
 @router.post("/connect")
 def connect_call(
     from_number: str | None = Form(None),
@@ -150,6 +231,7 @@ def collect_speech(
 ) -> Response:
     transcript_text = SpeechResult or ""
     callback_url = f"{settings.public_base_url}/api/calls/collect"
+    immediate_escalation = _immediate_escalation_reason(transcript_text) if transcript_text else None
 
     if transcript_text:
         # Keep one transcript row per call and append each new utterance.
@@ -167,64 +249,15 @@ def collect_speech(
 
         request_type = infer_request_type(transcript_text)
         extracted = _extract_appointment_details(transcript_text) if request_type == "appointment_scheduling" else {}
-
-        # Check existing pending task for this call
-        existing_task = (
-            db.query(Task)
-            .filter(
-                Task.call_sid == CallSid,
-                Task.status == "pending",
+        if not immediate_escalation and request_type:
+            _create_or_update_intent_task(
+                db=db,
+                call_sid=CallSid,
+                from_number=From,
+                request_type=request_type,
+                transcript_text=transcript_text,
+                extracted=extracted,
             )
-            .first()
-        )
-
-        # If appointment info appears in follow-up turns, merge it into the pending appointment task
-        # even when current turn intent is detected as "other".
-        if existing_task and existing_task.request_type == "appointment_scheduling":
-            merged_extracted = _extract_appointment_details(transcript_text)
-            if merged_extracted:
-                try:
-                    existing_details = json.loads(existing_task.details) if existing_task.details else {}
-                except json.JSONDecodeError:
-                    existing_details = {"raw_request": existing_task.details or "", "extracted": {}}
-                existing_extracted = existing_details.get("extracted", {})
-                if not isinstance(existing_extracted, dict):
-                    existing_extracted = {}
-                existing_extracted = _merge_extracted(existing_extracted, merged_extracted)
-                existing_details["extracted"] = existing_extracted
-                existing_task.details = json.dumps(existing_details)
-                if merged_extracted.get("patient_name"):
-                    existing_task.patient_name = merged_extracted["patient_name"]
-
-        if request_type:
-            if not existing_task:
-                task = Task(
-                    call_sid=CallSid,
-                    patient_name=extracted.get("patient_name"),
-                    callback_number=From,
-                    request_type=request_type,
-                    priority="normal",
-                    details=json.dumps(
-                        {
-                            "raw_request": transcript_text,
-                            "extracted": extracted,
-                        }
-                    ),
-                )
-                db.add(task)
-            elif request_type == "appointment_scheduling":
-                try:
-                    existing_details = json.loads(existing_task.details) if existing_task.details else {}
-                except json.JSONDecodeError:
-                    existing_details = {"raw_request": existing_task.details or "", "extracted": {}}
-                existing_extracted = existing_details.get("extracted", {})
-                if not isinstance(existing_extracted, dict):
-                    existing_extracted = {}
-                existing_extracted = _merge_extracted(existing_extracted, extracted)
-                existing_details["extracted"] = existing_extracted
-                existing_task.details = json.dumps(existing_details)
-                if extracted.get("patient_name"):
-                    existing_task.patient_name = extracted["patient_name"]
 
         db.commit()
     else:
@@ -232,21 +265,62 @@ def collect_speech(
         return Response(content=twiml, media_type="application/xml")
 
     if _should_end_call(transcript_text):
+        pending_count = (
+            db.query(Task)
+            .filter(Task.call_sid == CallSid, Task.status == "pending")
+            .count()
+        )
         FAILED_TURN_COUNTER.pop(CallSid, None)
         AI_FAILURE_COUNTER.pop(CallSid, None)
-        twiml = say_and_hangup("Thank you for calling the clinic. Goodbye.")
+        if pending_count > 0:
+            twiml = say_and_hangup(
+                "Thank you. I have created your request. Our clinic staff will call you back shortly. Goodbye."
+            )
+        else:
+            twiml = say_and_hangup("Thank you for calling the clinic. Goodbye.")
+        return Response(content=twiml, media_type="application/xml")
+
+    if immediate_escalation:
+        db.add(
+            Escalation(
+                call_sid=CallSid,
+                reason=immediate_escalation,
+                details=transcript_text,
+            )
+        )
+        db.commit()
+        FAILED_TURN_COUNTER.pop(CallSid, None)
+        AI_FAILURE_COUNTER.pop(CallSid, None)
+        logger.info(
+            "call_turn call_sid=%s transcript=%r openai_status=%s latency_ms=%s fallback=%s escalated=%s reason=%s",
+            CallSid,
+            transcript_text,
+            "not_called_immediate_escalation",
+            0,
+            False,
+            True,
+            immediate_escalation,
+        )
+        twiml = hold_then_hangup(
+            "I am escalating this call to our clinic staff right away for better support.",
+            hold_seconds=10,
+        )
         return Response(content=twiml, media_type="application/xml")
 
     llm_start = perf_counter()
     llm_reply = generate_call_reply(transcript_text)
     latency_ms = int((perf_counter() - llm_start) * 1000)
 
-    if llm_reply.fallback_used and llm_reply.openai_status == "empty_output":
+    if llm_reply.fallback_used and llm_reply.openai_status.endswith("_empty_output"):
         FAILED_TURN_COUNTER[CallSid] = FAILED_TURN_COUNTER.get(CallSid, 0) + 1
     else:
         FAILED_TURN_COUNTER[CallSid] = 0
 
-    if llm_reply.openai_status in {"request_exception", "empty_output"} or llm_reply.openai_status.startswith("http_"):
+    if (
+        llm_reply.openai_status.endswith("_request_exception")
+        or llm_reply.openai_status.endswith("_empty_output")
+        or "_http_" in llm_reply.openai_status
+    ):
         AI_FAILURE_COUNTER[CallSid] = AI_FAILURE_COUNTER.get(CallSid, 0) + 1
     else:
         AI_FAILURE_COUNTER[CallSid] = 0
@@ -273,12 +347,6 @@ def collect_speech(
             True,
             escalation_reason,
         )
-        if escalation_reason in {"medical_emergency_keyword", "requested_human"}:
-            twiml = say_and_hangup(
-                "I am connecting this request to our staff for faster help. "
-                "They will call you back shortly. Goodbye."
-            )
-            return Response(content=twiml, media_type="application/xml")
         twiml = say_and_gather(
             "I am having trouble understanding consistently. "
             "You can continue, or say human anytime and I will connect staff.",

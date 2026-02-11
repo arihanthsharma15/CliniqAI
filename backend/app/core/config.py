@@ -16,7 +16,11 @@ class Settings(BaseSettings):
     twilio_phone_number: str | None = None
 
     # AI services
+    llm_provider: str = "auto"
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.1-8b-instant"
     openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
     deepgram_api_key: str | None = None
     elevenlabs_api_key: str | None = None
 
