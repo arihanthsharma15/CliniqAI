@@ -60,3 +60,18 @@ def say_and_hangup(message: str) -> str:
     say.text = message
     SubElement(response, "Hangup")
     return _render(response)
+
+
+def hold_then_hangup(message: str, hold_seconds: int = 8) -> str:
+    response = Element("Response")
+    say = SubElement(response, "Say")
+    say.text = message
+
+    hold_prompt = SubElement(response, "Say")
+    hold_prompt.text = "Please hold while I connect you to our clinic staff."
+    SubElement(response, "Pause", length=str(max(1, min(hold_seconds, 60))))
+
+    fallback = SubElement(response, "Say")
+    fallback.text = "Our team will call you back shortly. Thank you."
+    SubElement(response, "Hangup")
+    return _render(response)
