@@ -8,6 +8,7 @@ class TaskCreate(BaseModel):
     patient_name: str | None = None
     callback_number: str | None = None
     request_type: str
+    assigned_role: str = "staff"
     priority: str = "normal"
     details: str | None = None
 
@@ -18,6 +19,7 @@ class TaskRead(BaseModel):
     patient_name: str | None
     callback_number: str | None
     request_type: str
+    assigned_role: str
     priority: str
     details: str | None
     status: str

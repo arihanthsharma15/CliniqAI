@@ -13,6 +13,7 @@ dependencies = [
   "alembic",
   "python-multipart",
   "httpx",
+  "google-auth",
 ]
 
 [tool.uvicorn]
