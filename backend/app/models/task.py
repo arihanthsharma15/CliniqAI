@@ -14,6 +14,7 @@ class Task(Base):
     patient_name: Mapped[str | None] = mapped_column(String(128))
     callback_number: Mapped[str | None] = mapped_column(String(32))
     request_type: Mapped[str] = mapped_column(String(64))
+    assigned_role: Mapped[str] = mapped_column(String(16), default="staff", index=True)
     priority: Mapped[str] = mapped_column(String(16), default="normal")
     details: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default="pending")

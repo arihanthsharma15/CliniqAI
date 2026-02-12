@@ -22,6 +22,26 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)) -> TaskRead:
     return task
 
 
+@router.get("/queue/staff", response_model=list[TaskRead])
+def staff_queue(db: Session = Depends(get_db)) -> list[TaskRead]:
+    return (
+        db.query(Task)
+        .filter(Task.status == "pending", Task.assigned_role == "staff")
+        .order_by(Task.created_at.desc())
+        .all()
+    )
+
+
+@router.get("/queue/doctor", response_model=list[TaskRead])
+def doctor_queue(db: Session = Depends(get_db)) -> list[TaskRead]:
+    return (
+        db.query(Task)
+        .filter(Task.status == "pending", Task.assigned_role == "doctor")
+        .order_by(Task.created_at.desc())
+        .all()
+    )
+
+
 @router.get("/{task_id}", response_model=TaskRead)
 def get_task(task_id: int, db: Session = Depends(get_db)) -> TaskRead:
     task = db.query(Task).filter(Task.id == task_id).first()
