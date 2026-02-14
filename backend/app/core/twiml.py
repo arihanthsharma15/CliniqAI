@@ -15,7 +15,7 @@ def _gather_base_attrs(action_url: str, stt_mode: str | None = None) -> dict[str
         "actionOnEmptyResult": "true",
         "bargeIn": "true",
         "speechTimeout": "auto",
-        "timeout": "4",
+        "timeout": "2",
     }
     language = (settings.twilio_speech_language or "").strip()
     if language:
@@ -91,9 +91,32 @@ def play_and_gather(
     stt_mode: str | None = None,
 ) -> str:
     response = Element("Response")
-    play = SubElement(response, "Play")
+    gather = SubElement(
+        response,
+        "Gather",
+        **_gather_base_attrs(action_url, stt_mode=stt_mode),
+    )
+    play = SubElement(gather, "Play")
     play.text = audio_url
+    if reprompt:
+        say2 = SubElement(gather, "Say")
+        say2.text = reprompt
+    return _render(response)
 
+
+def start_stream_and_gather(
+    message: str,
+    stream_url: str,
+    action_url: str,
+    stt_mode: str | None = None,
+    reprompt: str | None = None,
+) -> str:
+    response = Element("Response")
+    start = SubElement(response, "Start")
+    stream = SubElement(start, "Stream", url=stream_url)
+    stream.set("track", "inbound_track")
+    say = SubElement(response, "Say")
+    say.text = message
     gather = SubElement(
         response,
         "Gather",

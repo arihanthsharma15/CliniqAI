@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     twilio_speech_hints: str | None = None
     stt_fallback_empty_turns: int = 2
     stt_low_confidence_threshold: float = 0.45
+    ws_brain_mode: bool = True
+    ws_webhook_fallback: bool = True
     elevenlabs_api_key: str | None = None
     tts_provider: str = "twilio"
     elevenlabs_voice_id: str | None = None
