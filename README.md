@@ -15,3 +15,6 @@ This repo is scaffold-only for now. Once we add dependencies, we'll provide:
 
 ## Roadmap
 See `docs/product.md` for the full product/tech roadmap.
+
+## Credits
+- Frontend UI started from the TailAdmin template. Thanks to the TailAdmin team for the base design system and components.
