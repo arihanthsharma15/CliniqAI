@@ -27,3 +27,7 @@ class TaskRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TaskStatusUpdate(BaseModel):
+    status: str

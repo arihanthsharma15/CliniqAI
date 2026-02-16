@@ -14,6 +14,14 @@ class Settings(BaseSettings):
 
     public_base_url: str = "http://localhost:8000"
 
+    # Demo mode limits call length for testing
+    demo_mode: bool = True
+    max_demo_turns: int = 6
+    skip_name_confirmation: bool = True
+
+    # Redis for persistent job queue (optional, add later)
+    redis_url: str = "redis://localhost:6379"
+
     # Twilio
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None
