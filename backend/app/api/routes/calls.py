@@ -24,7 +24,6 @@ from app.models.escalation import Escalation
 from app.models.task import Task
 from app.models.transcript import Transcript
 from app.services.intent import infer_request_type, infer_request_types
-from app.services.llm import generate_call_reply
 from app.services.notifications import flush_call_notifications, queue_task_notification
 from app.services.notification_store import create_notification
 from app.services.deepgram_stream import DeepgramRealtimeBridge
@@ -37,6 +36,7 @@ from app.services.context import (
     log_conversation_quality,
 )
 from app.services.tts import cache_audio, get_cached_audio, synthesize_tts
+from app.services.llm import generate_controlled_reply
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -132,7 +132,10 @@ CALLBACK_STATUS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 STATUS_QUESTION_PATTERN = re.compile(
-    r"\b(did you|have you|can you confirm|is my|what is|what's|confirm)\b",
+    r"\b("
+    r"is|did|have|can|confirm|status|check|"
+    r"appointment\??|callback\??"
+    r")\b",
     re.IGNORECASE,
 )
 CALLBACK_WINDOW_PATTERN = re.compile(
@@ -619,8 +622,6 @@ def _status_reply(db: Session, call_sid: str, text: str) -> str | None:
     )
     if not asks_appointment_status and not asks_callback_status:
         return None
-    if not asks_appointment_status and not asks_callback_status:
-        return None
 
     appt_task = (
         db.query(Task)
@@ -734,6 +735,12 @@ def collect_speech(
     db: Session = Depends(get_db),
 ) -> Response:
     ctx = get_context(CallSid)
+
+    #  ADDITION 1 — ensure stage always exists
+    if not ctx.get("conversation_stage"):
+        update_context(CallSid, {"conversation_stage": "COLLECTING"})
+        ctx = get_context(CallSid)
+
     effective_stt_mode = _normalized_stt_mode(stt_mode or ctx.get("stt_mode"))
     update_context(CallSid, {"stt_mode": effective_stt_mode})
     raw_transcript_text = (SpeechResult or "").strip()
@@ -865,11 +872,16 @@ def collect_speech(
 
     status_message = _status_reply(db, CallSid, transcript_text)
     if status_message:
-        _append_transcript_line(db, CallSid, "BOT", status_message)
+        bot_message = f"{status_message} Anything else I can help you with?"
+        _append_transcript_line(db, CallSid, "BOT", bot_message)
         db.commit()
-        _log_bot_turn_quality(CallSid, status_message, raw_transcript_text)
+        _log_bot_turn_quality(CallSid, bot_message, raw_transcript_text)
         return Response(
-            content=_render_bot_reply_twiml(status_message, callback_url, stt_mode=effective_stt_mode),
+            content=_render_bot_reply_twiml(
+                bot_message,
+                callback_url,
+                stt_mode=effective_stt_mode,
+              ),
             media_type="application/xml",
         )
 
@@ -907,50 +919,29 @@ def collect_speech(
     db.commit()
 
     appt_task = (
-        db.query(Task)
-        .filter(
-            Task.call_sid == CallSid,
-            Task.status == "pending",
-            Task.request_type == "appointment_scheduling",
-        )
-        .first()
+    db.query(Task)
+    .filter(
+        Task.call_sid == CallSid,
+        Task.status == "pending",
+        Task.request_type == "appointment_scheduling",
     )
+    .first()
+)
+
     if appt_task:
         extracted = _get_extracted_from_task(appt_task)
+
         has_name = bool((appt_task.patient_name or "").strip() or extracted.get("patient_name"))
         has_schedule = bool(extracted.get("preferred_schedule", "").strip())
+
         if has_name and has_schedule:
             update_context(CallSid, {"appointment_confirmed": True})
-            appt_type = extracted.get("appointment_type", "appointment").strip()
-            schedule = extracted.get("preferred_schedule", "your requested time").strip()
-            name = (appt_task.patient_name or extracted.get("patient_name") or "").strip()
-            name_line = f" I noted your name as {name}." if name else ""
-            bot_message = (
-                f"Thanks. I have your {appt_type} request for {schedule}. "
-                f"Our clinic staff will call you at {_callback_number_hint(From)} to confirm.{name_line} "
-                "Do you need anything else?"
-            )
-            if settings.demo_mode:
-                bot_message = f"{bot_message} Goodbye."
-                _append_transcript_line(db, CallSid, "BOT", bot_message)
-                db.commit()
-                _log_bot_turn_quality(CallSid, bot_message, raw_transcript_text)
-                flush_call_notifications(CallSid)
-                cleanup_context(CallSid)
-                return Response(content=_render_bot_hangup_twiml(bot_message), media_type="application/xml")
-        else:
-            bot_message = _appointment_reply(appt_task, From)
-        _append_transcript_line(db, CallSid, "BOT", bot_message)
-        db.commit()
-        _log_bot_turn_quality(CallSid, bot_message, raw_transcript_text)
-        logger.info("bot_reply call_sid=%s source=appointment_flow text=%r", CallSid, bot_message)
-        return Response(
-            content=_render_bot_reply_twiml(bot_message, callback_url, stt_mode=effective_stt_mode),
-            media_type="application/xml",
-        )
+
+    # ⭐ DO NOT SPEAK HERE
+    # State machine will generate the response
 
     llm_start = perf_counter()
-    llm_reply = generate_call_reply(transcript_text, context=ctx)
+    llm_reply = generate_controlled_reply(CallSid, transcript_text)
     latency_ms = int((perf_counter() - llm_start) * 1000)
     if llm_reply.fallback_used and llm_reply.openai_status.endswith("_empty_output"):
         update_context(CallSid, {"failed_turns": int(ctx.get("failed_turns", 0)) + 1})
@@ -1041,6 +1032,15 @@ def collect_speech(
         llm_reply.fallback_used,
         False,
     )
+
+    if get_context(CallSid).get("state") == "END_CALL":
+        flush_call_notifications(CallSid)
+        cleanup_context(CallSid)
+
+        return Response(
+            content=_render_bot_hangup_twiml(llm_reply.text),
+            media_type="application/xml",
+        )
     _append_transcript_line(db, CallSid, "BOT", llm_reply.text)
     db.commit()
     _log_bot_turn_quality(CallSid, llm_reply.text, raw_transcript_text)
