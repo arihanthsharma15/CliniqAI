@@ -6,13 +6,19 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
-from app.services.intent import infer_request_type
+
+
+from app.services.intent import parse_user_input
+from app.services.state_machine import next_state
+from app.services.context import get_context, update_context
 
 
 SYSTEM_PROMPT = (
-    "You are a clinic phone assistant. Be brief and friendly (under 20 words per response). "
-    "Help patients schedule appointments or request callbacks. "
-    "If unclear after 1 question, say: 'Let me connect you to our staff.'"
+    "You are a clinic voice assistant.\n"
+    "Follow backend instructions strictly.\n"
+    "Never decide conversation flow yourself.\n"
+    "Speak naturally, briefly (under 20 words).\n"
+    "Do NOT ask extra questions unless instructed.\n"
 )
 
 
@@ -52,18 +58,11 @@ def _extract_chat_completion_text(data: dict[str, Any]) -> str:
 
 
 def _rule_based_reply(user_text: str, context: dict[str, Any] | None = None) -> str:
-    request_type = infer_request_type(user_text)
-    context = context or {}
-    appointment_confirmed = bool(context.get("appointment_confirmed"))
-    has_schedule = bool(context.get("preferred_schedule")) or bool(context.get("appointment_type"))
-
-    if request_type == "appointment_scheduling":
-        if appointment_confirmed or has_schedule:
-            return "Appointment details noted. Share your name if missing."
-        return "I can help schedule that. What's your name and preferred date/time?"
-    if request_type == "callback_request":
-        return "Sure. When's the best time for us to call you back?"
-    return "I'll create a task for our staff to help with that. What's your name?"
+    """
+    Safety fallback when LLM provider fails.
+    Does NOT control conversation anymore.
+    """
+    return "I'm having a small connection issue. Let me assist you shortly."
 
 
 def _call_openai(user_text: str, context: dict[str, Any] | None = None) -> LLMReply:
@@ -110,6 +109,43 @@ def _call_groq(user_text: str, context: dict[str, Any] | None = None) -> LLMRepl
     except Exception:
         pass
     return LLMReply(_rule_based_reply(user_text, context), "groq_fallback", True)
+
+
+def generate_controlled_reply(call_sid: str, user_text: str) -> LLMReply:
+    """
+    MAIN ENTRYPOINT FOR VOICE AGENT
+    State machine controls conversation.
+    LLM only verbalizes instruction.
+    """
+
+    context = get_context(call_sid)
+
+    # -------- Intent + Entities ----------
+    parsed = parse_user_input(user_text)
+    intent = parsed["intent"]
+    entities = parsed["entities"]
+
+    # -------- STATE MACHINE ----------
+    state, instruction = next_state(call_sid, intent, entities)
+
+    # store latest state
+    update_context(call_sid, {"state": state})
+
+    # -------- LLM SPEAKS INSTRUCTION ----------
+    guided_text = f"Instruction: {instruction}"
+
+    provider = settings.llm_provider.strip().lower()
+
+    if provider == "groq":
+        reply = _call_groq(guided_text, context)
+    elif provider == "openai":
+        reply = _call_openai(guided_text, context)
+    else:
+        reply = _call_groq(guided_text, context)
+        if reply.fallback_used:
+            reply = _call_openai(guided_text, context)
+
+    return reply
 
 
 def generate_call_reply(user_text: str, context: dict[str, Any] | None = None) -> LLMReply:

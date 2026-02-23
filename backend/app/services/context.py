@@ -16,16 +16,44 @@ def _default_context() -> dict[str, Any]:
         "appointment_confirmed": False,
         "no_speech_count": 0,
         "stt_mode": "deepgram",
+
+        # ⭐ STATE MACHINE CONTROL
+        "state": "GREETING",
+        # STATES:
+        # GREETING
+        # GENERAL
+        # APPOINTMENT_NAME
+        # APPOINTMENT_TYPE
+        # APPOINTMENT_DATE
+        # APPOINTMENT_TIME
+        # TASK_CONFIRMED
+        #POST_TASK
+        # END_CALL
+
+        # ⭐ SLOT MEMORY (what user already provided)
+        "slots": {
+            "name": None,
+            "task_type": None,   # appointment / refill
+            "date": None,
+            "time": None,
+        },
+
+        # ⭐ TASK + CALL FLAGS
+        "task_created": False,
+        "call_completed": False,
+
+        "post_task_turn": 0,
+
         "last_user_text": "",
         "last_bot_text": "",
         "bot_repeat_count": 0,
+
         "deepgram_transcripts": {
             "final": "",
             "latest": "",
             "best": "",
         },
     }
-
 
 CALL_CONTEXT: dict[str, dict[str, Any]] = {}
 
