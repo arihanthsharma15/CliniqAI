@@ -121,18 +121,26 @@ def generate_controlled_reply(call_sid: str, user_text: str) -> LLMReply:
     context = get_context(call_sid)
 
     # -------- Intent + Entities ----------
-    parsed = parse_user_input(user_text)
+    parsed = parse_user_input(call_sid, user_text)
     intent = parsed["intent"]
     entities = parsed["entities"]
+    # ⭐ merge entities detected earlier in calls.py
+    context_entities = context.get("latest_entities", {})
+    entities = {**context_entities, **entities}
+    print("Entities: ", entities)
+
+
 
     # -------- STATE MACHINE ----------
     state, instruction = next_state(call_sid, intent, entities)
+    print("STATE:", state)
+    print("ENTITIES:", entities)
 
     # store latest state
     update_context(call_sid, {"state": state})
 
     # -------- LLM SPEAKS INSTRUCTION ----------
-    guided_text = f"Instruction: {instruction}"
+    guided_text = instruction
 
     provider = settings.llm_provider.strip().lower()
 
