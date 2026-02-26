@@ -1,361 +1,112 @@
-CliniqAI — Implementation Snapshot & Roadmap
+# 🏥 CliniqAI — Implementation Snapshot & Roadmap
+> **Internal Documentation** | Last Updated: 27th February 2026
 
-Last Updated: 27th February 2026
+---
 
-1️⃣ Current Implementation (Repository State)
-Backend Architecture
+## 1️⃣ Current Implementation (Repository State)
 
-Framework: FastAPI
-Structure: Modular router design
+### 🏗️ Backend Architecture
+* **Framework:** `FastAPI`
+* **Structure:** Modular router design with dependency injection.
 
-API Modules
+### 🔌 API Modules
+| Endpoint | Functionality | Status |
+| :--- | :--- | :--- |
+| `/api/calls` | Telephony entrypoint & conversation handling | ✅ Live |
+| `/api/tasks` | Task lifecycle management | ✅ Live |
+| `/api/transcripts` | Persistent conversation history | ✅ Live |
+| `/api/escalations` | Safety & human handoff logic | ✅ Live |
+| `/api/analytics` | Operational metrics endpoints | 🏗️ Beta |
+| `/api/notifications` | Real-time staff awareness layer | ✅ Live |
 
-/api/calls — Telephony entrypoint & conversation handling
+### 🧠 Core Domain Models
+- `calls` • `tasks` • `transcripts` • `escalations` • `notifications`
 
-/api/tasks — Task lifecycle management
+---
 
-/api/transcripts — Persistent conversation history
+## 📞 Telephony & Logic Flow
 
-/api/escalations — Safety & human handoff logic
+### Twilio Lifecycle
+1. **Inbound Webhook:** Initial request capture.
+2. **Greeting:** Context-aware initialization.
+3. **Speech Gathering:** Real-time stream collection.
+4. **AI Generation:** Controlled LLM response.
+5. **Loop:** State-aware conversational continuation.
 
-/api/analytics — Operational metrics endpoints
+### 🤖 Deterministic Orchestration
+* **State-Machine:** Controlled dialogue flow to prevent AI "hallucination loops."
+* **Slot Collection:** Structured data gathering for appointments.
+* **Intent Locking:** Freezes state during critical task execution.
+* **Receptionist Mode:** Post-task standby state.
 
-/api/notifications — Real-time staff awareness layer
+---
 
-Core Domain Models
+## 🛡️ Safety & Escalation System
 
-calls
+> [!IMPORTANT]
+> **Core Principle:** Uncertainty defaults to escalation.
 
-tasks
+**Trigger Conditions:**
+- [x] Emergency keyword detection.
+- [x] Explicit human handoff requests.
+- [x] Repeated AI misunderstanding (confidence < threshold).
+- [x] AI provider instability/latency fallback.
 
-transcripts
+---
 
-escalations
+## 🖥️ Frontend & Operations
 
-notifications
+### Role-Based Interfaces
+* **Staff Dashboard:** Active Task Queue (`pending`, `in_progress`, `completed`).
+* **Doctor Dashboard:** High-level clinical oversight.
+* **Transcript Viewer:** Deep-dive into specific call sessions.
 
-Telephony Flow (Twilio Lifecycle)
+### Operational Efficiency
+* **Alert Center:** Centralized escalation monitoring.
+* **Notifications:** Real-time "Mark as Read" / "Clear All" functionality.
+* **Filtering:** Advanced search by task group and priority.
 
-Inbound webhook handling
+---
 
-Greeting initialization
+## 🚀 2. Next Iteration — The Roadmap
 
-Speech gathering and collection
+### 🔐 Security & Auth
+- [ ] **Production Auth:** Replace demo auth with production-grade backend.
+- [ ] **RBAC:** Implement full Role-Based Access Control across all roles.
+- [ ] **Admin UI:** Global clinic configuration dashboard.
 
-Controlled AI response generation
+### 🏥 Clinical Workflow
+- [ ] **Doctor Decisioning:** Approve / Reject / Request Follow-up workflow.
+- [ ] **Multi-tenancy:** `clinics` and `users` tables for data isolation.
+- [ ] **Call Metadata:** Store `recording_url`, `duration`, and `consent`.
 
-Conversational continuation loop
+---
 
-Deterministic Conversation Orchestration
+## ⚠️ 3. Risk Areas & Mitigation
 
-State-machine controlled dialogue flow
+> [!CAUTION]
+> **Highest Risk:** Missed emergency escalation. Safety rules MUST execute before LLM generation.
 
-Structured slot collection for appointment scheduling
+| Risk Category | Mitigation Strategy |
+| :--- | :--- |
+| **Reliability** | Move context to **Redis** (TTL-backed persistence). |
+| **Compliance** | Restrict PHI to BAA-supported vendors; enforce Server-side RBAC. |
+| **Operational** | Adopt **Alembic** migrations and staged "Canary" deployments. |
 
-Intent locking during task execution
+---
 
-Post-task receptionist mode
+## 🛠️ 4. Async Migration Plan
 
-Intent Detection Layer
+**Goal:** Reduce latency by moving side-effects (notifications/integrations) out of the request thread.
 
-Supported intents:
+1.  **Event Emission:** API commits DB transaction -> Emits `task.created`.
+2.  **Worker:** Redis-backed worker consumes event.
+3.  **Resilience:** Exponential backoff + Dead-letter queue (DLQ) for failed alerts.
 
-Appointment scheduling
+---
 
-Callback requests
+## 🔊 5. TTS Provider Strategy
+* **Primary:** Google Cloud TTS (Baseline).
+* **Evaluation:** Move to **ElevenLabs** only if A/B testing shows significant patient experience improvement vs. cost.
 
-General clinic queries
-
-Medication/refill detection safeguards
-
-Safety Escalation System
-
-Escalation triggers:
-
-Emergency keyword detection
-
-Explicit human handoff requests
-
-Repeated AI misunderstanding detection
-
-AI provider instability fallback
-
-Principle: Uncertainty defaults to escalation.
-
-Persistence & Notifications
-
-Persistent transcript storage and retrieval
-
-In-app notification generation
-
-Role-based delivery (staff / doctor)
-
-Optional SMS fanout support
-
-Frontend Capabilities
-
-Role-based navigation for clinic workflows
-
-Staff dashboard
-
-Doctor dashboard
-
-Operational Interfaces
-
-Task Queue
-
-pending
-
-in_progress
-
-completed
-
-Additional Interfaces
-
-Transcript viewer linked to call sessions
-
-Escalation alert center
-
-Notification dropdown:
-
-Mark as read
-
-Clear all
-
-Operational Efficiency
-
-Search
-
-Filtering
-
-Task grouping
-
-2️⃣ Next Iteration — Improvements Needed
-Product & Workflow Enhancements
-
-Replace demo authentication with production-grade backend auth
-
-Implement full RBAC across clinic roles
-
-Introduce admin dashboard for clinic configuration
-
-Add explicit doctor decision workflow:
-
-Approve
-
-Reject
-
-Request follow-up
-
-Data Model Enhancements
-
-Introduce clinics and users tables for multi-tenant isolation
-
-Add call recording metadata:
-
-recording_url
-
-duration_sec
-
-consent_indicators
-
-Expand audit trail coverage for sensitive reads and actions
-
-Analytics Expansion
-
-Average call duration calculation
-
-Hourly call load visualization
-
-Task completion SLA tracking
-
-Provider latency and failure monitoring
-
-Safety Enhancements
-
-Duration-based escalation thresholds
-
-Stronger distress & emotional sentiment detection
-
-Deterministic medication and test-result guardrails
-
-3️⃣ Risk Areas & Failure Modes
-Safety Risk
-
-Missed emergency escalation (highest risk scenario)
-
-Medical requests bypassing insufficient guardrails
-
-Safety Principle:
-
-When uncertain, escalate.
-
-Reliability Risk
-
-In-memory conversation context volatile across service restarts
-
-External provider outages (LLM / STT / TTS)
-
-Notification side effects lacking durable retry guarantees
-
-Compliance Risk
-
-Demo authentication not production compliant
-
-Lack of tenant isolation
-
-PHI exposure risk without strict provider boundaries
-
-Operational Risk
-
-Weak migration discipline causing instability
-
-Limited observability delaying degraded behavior detection
-
-4️⃣ Mitigation Strategy
-Safety Mitigation
-
-Execute emergency & medical escalation rules before LLM response generation
-
-Maintain conservative escalation thresholds during pilot
-
-Weekly manual review of failed & escalated calls
-
-Reliability Mitigation
-
-Move conversation context to Redis (TTL-backed persistence)
-
-Introduce provider fallback + circuit breaker behavior
-
-Add retry & dead-letter handling for outbound notifications
-
-Compliance Mitigation
-
-Enforce backend authentication
-
-Enforce server-side RBAC
-
-Add tenant scoping (clinic_id) to all queries
-
-Restrict PHI transmission to BAA-supported vendors only
-
-Operational Mitigation
-
-Adopt Alembic-based schema migration workflow
-
-Use staged deployment strategy
-
-Implement monitoring & alerting for:
-
-Latency spikes
-
-Escalation anomalies
-
-Provider failures
-
-5️⃣ Production Rollout Plan
-Phase A — Single Clinic Pilot
-
-Restrict automation to low-risk administrative requests
-
-Conservative escalation thresholds
-
-Manual review of first 100–300 calls
-
-Phase B — Stabilization
-
-Analyze misclassification & escalation trends
-
-Tune prompts, rules & confidence thresholds
-
-Validate staff workflow usability
-
-Phase C — Controlled Expansion
-
-Expand to 3–5 clinics
-
-Validate tenant isolation under load
-
-Introduce service-level objectives
-
-Phase D — General Production Rollout
-
-Regional canary deployments
-
-Maintain rollback capability per deployment & migration
-
-6️⃣ Async Migration Plan (Required)
-Motivation
-
-Synchronous external side effects increase latency and reduce reliability during provider failures.
-
-Target Architecture
-
-API commits core DB transaction
-
-System emits domain event (task.created, escalation.created)
-
-Worker consumes event asynchronously
-
-Worker performs notifications & integrations
-
-Delivery status tracked independently
-
-Migration Steps
-
-Introduce Redis-backed worker infrastructure
-
-Create job event table with idempotency keys
-
-Move notification delivery outside request thread
-
-Implement exponential backoff retry logic
-
-Add dead-letter queue & replay tooling
-
-Async Safety Controls
-
-Idempotent handlers
-
-Retry limits
-
-Dead-letter monitoring
-
-Feature-flag controlled rollout
-
-7️⃣ Database Migration Strategy
-
-Initialize Alembic baseline
-
-Apply additive migrations first
-
-Incremental backfill (clinic_id, auth references)
-
-Enforce constraints after validation
-
-Deploy in compatibility mode
-
-Remove legacy logic post-verification
-
-Migration Principles
-
-Validate against staging snapshot
-
-Every production migration includes rollback plan
-
-Prefer forward-only migrations
-
-8️⃣ TTS Provider Decision — Pilot
-
-Baseline: Google Cloud TTS
-
-Migration to ElevenLabs only if:
-
-Measurable patient experience improvement
-
-Acceptable cost efficiency
-
-Compliance validation
-
-Strategy:
-Maintain Google TTS baseline and conduct controlled A/B testing before migration.
+---
