@@ -34,9 +34,13 @@ def _default_context() -> dict[str, Any]:
         "slots": {
             "name": None,
             "task_type": None,   # appointment / refill
+            "appointment_type": None,
             "date": None,
             "time": None,
         },
+
+         # ⭐ ENTITY MEMORY (ADD THIS HERE)
+        "latest_entities": {},
 
         # ⭐ TASK + CALL FLAGS
         "task_created": False,
@@ -131,3 +135,8 @@ def log_conversation_quality(call_sid: str, user_text: str, bot_text: str) -> No
     context["last_user_text"] = user_text or ""
     context["last_bot_text"] = bot_text or ""
     context["bot_repeat_count"] = repeat_count
+
+def mark_call_completed(call_sid: str):
+    context = get_context(call_sid)
+    context["call_completed"] = True
+    cleanup_context(call_sid)

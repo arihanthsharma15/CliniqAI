@@ -144,24 +144,18 @@ CALLBACK_WINDOW_PATTERN = re.compile(
 )
 
 
-def _should_end_call(text: str) -> bool:
-    lowered = text.strip().lower()
-    words = lowered.split()
-    explicit = bool(
-        re.search(
-            r"\b(bye|goodbye|that's all|that is all|that's it|that will be all|no that's all)\b",
-            lowered,
-        )
-    )
-    short_thanks = bool(re.search(r"\b(thank you|thanks|thank u)\b", lowered)) and len(words) <= 6
-    return explicit or short_thanks
 
 
 def _normalized_stt_mode(mode: str | None) -> str:
-    candidate = (mode or settings.stt_provider).strip().lower()
-    if candidate in {"deepgram", "twilio_deepgram"}:
+    candidate = (mode or settings.stt_provider or "deepgram").strip().lower()
+
+    if candidate == "deepgram":
         return "deepgram"
-    return "twilio"
+
+    if candidate == "twilio":
+        return "twilio"
+
+    return "deepgram"
 
 
 def _use_direct_deepgram_streaming() -> bool:
@@ -286,13 +280,13 @@ def _split_clauses(text: str) -> list[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 
-def _intent_specific_text(text: str, request_type: str, fallback_to_full: bool = True) -> str:
+def _intent_specific_text(call_sid: str, text: str, request_type: str, fallback_to_full: bool = True) -> str:
     clauses = _split_clauses(text)
     if not clauses:
         return text
     matched: list[str] = []
     for clause in clauses:
-        if infer_request_type(clause) == request_type:
+        if infer_request_type(call_sid,clause) == request_type:
             matched.append(clause)
     if matched:
         return ". ".join(matched)
@@ -425,6 +419,8 @@ def _create_or_update_intent_task(
         return
     if request_type == "general_question" and not CREATE_GENERAL_QUESTION_TASKS:
         return
+    if request_type in {"other", "general_question"}:
+        return
 
     matching_task = (
         db.query(Task)
@@ -551,13 +547,19 @@ def _transfer_target_number(escalation_reason: str) -> str | None:
 def _render_bot_reply_twiml(bot_message: str, callback_url: str, stt_mode: str) -> str:
     try:
         audio_bytes = synthesize_tts(bot_message)
+        logger.warning("TTS BYTES LENGTH = %s", len(audio_bytes) if audio_bytes else 0)
     except Exception as exc:
         logger.error("TTS synthesis failed provider=%s error=%s", settings.tts_provider, str(exc))
         audio_bytes = None
+
     if audio_bytes:
         audio_id = cache_audio(audio_bytes)
         audio_url = f"{settings.public_base_url}/api/calls/tts/{audio_id}"
+
+        logger.warning("TTS URL SENT TO TWILIO = %s", audio_url)
+
         return play_and_gather(audio_url=audio_url, action_url=callback_url, stt_mode=stt_mode)
+
     return say_and_gather(bot_message, callback_url, reprompt=None, stt_mode=stt_mode)
 
 
@@ -612,49 +614,6 @@ def _callback_window_from_task(task: Task | None) -> str | None:
     return None
 
 
-def _status_reply(db: Session, call_sid: str, text: str) -> str | None:
-    lowered = text.lower()
-    asks_appointment_status = bool(APPOINTMENT_STATUS_PATTERN.search(lowered)) and bool(STATUS_QUESTION_PATTERN.search(lowered))
-    callback_mentioned = bool(CALLBACK_STATUS_PATTERN.search(lowered))
-    asks_callback_status = callback_mentioned and (
-        bool(STATUS_QUESTION_PATTERN.search(lowered))
-        or lowered.strip() in {"callback", "the callback", "and the callback"}
-    )
-    if not asks_appointment_status and not asks_callback_status:
-        return None
-
-    appt_task = (
-        db.query(Task)
-        .filter(
-            Task.call_sid == call_sid,
-            Task.status == "pending",
-            Task.request_type == "appointment_scheduling",
-        )
-        .first()
-    )
-    callback_task = (
-        db.query(Task)
-        .filter(
-            Task.call_sid == call_sid,
-            Task.status == "pending",
-            Task.request_type == "callback_request",
-        )
-        .first()
-    )
-
-    if asks_appointment_status and appt_task:
-        extracted = _get_extracted_from_task(appt_task)
-        schedule = extracted.get("preferred_schedule", "your requested time")
-        return f"Yes, your appointment request is captured for {schedule}. The clinic staff will confirm it with you."
-    if asks_callback_status and callback_task:
-        window = _callback_window_from_task(callback_task) or "your requested time window"
-        return f"Yes, I created your callback request. Our staff will call you in {window}."
-    if asks_appointment_status and not appt_task:
-        return "I do not have a complete appointment request yet. Please tell me your preferred date and time."
-    if asks_callback_status and not callback_task:
-        return "I do not have a callback request yet. Please tell me when you want a callback."
-    return None
-
 
 @router.post("/connect")
 def connect_call(
@@ -681,12 +640,12 @@ def twilio_webhook(
 ) -> Response:
     call = db.query(Call).filter(Call.call_sid == CallSid).first()
     ctx = get_context(CallSid)
-    stt_mode = _normalized_stt_mode(ctx.get("stt_mode"))
+    stt_mode = _normalized_stt_mode(settings.stt_provider)
     callback_url = _collect_callback_url(stt_mode)
     if not call:
         call = Call(call_sid=CallSid, from_number=From, to_number=To, status=CallStatus)
         db.add(call)
-        db.commit()
+        db.commit() 
         stt_mode = _normalized_stt_mode(settings.stt_provider)
         update_context(
             CallSid,
@@ -699,6 +658,7 @@ def twilio_webhook(
         )
         callback_url = _collect_callback_url(stt_mode)
         bot_message = "Thank you for calling. I am the clinic assistant. How may I help you today?"
+        update_context(CallSid, {"state": "GENERAL"})
     else:
         # Twilio can retry /webhook callbacks; avoid restarting with full greeting.
         call.status = CallStatus or call.status
@@ -793,16 +753,29 @@ def collect_speech(
         logger.warning("stt_fallback switched_to=twilio")
 
     if not raw_transcript_text:
-        update_context(CallSid, {"no_speech_count": int(ctx.get("no_speech_count", 0)) + 1})
-        if _use_direct_deepgram_streaming() and settings.ws_brain_mode and int(get_context(CallSid).get("no_speech_count", 0)) <= 1:
-            twiml = _render_bot_reply_twiml("Please continue.", callback_url, stt_mode=effective_stt_mode)
-            return Response(content=twiml, media_type="application/xml")
-        bot_message = "I did not catch that clearly. Please say your request again."
+
+        # ⭐ allow short-answer retry without looping
+        last_state = get_context(CallSid).get("state")
+
+        if last_state.startswith("APPOINTMENT"):
+            bot_message = "Please say your full name clearly."
+        else:
+            bot_message = "I did not catch that clearly. Please say your request again."
+
+        update_context(CallSid, {
+            "no_speech_count": int(ctx.get("no_speech_count", 0)) + 1
+        })
+
         _append_transcript_line(db, CallSid, "BOT", bot_message)
         db.commit()
         _log_bot_turn_quality(CallSid, bot_message)
-        logger.info("bot_reply call_sid=%s source=silence_reprompt text=%r", CallSid, bot_message)
-        twiml = _render_bot_reply_twiml(bot_message, callback_url, stt_mode=effective_stt_mode)
+
+        twiml = _render_bot_reply_twiml(
+            bot_message,
+            callback_url,
+            stt_mode=effective_stt_mode,
+        )
+
         return Response(content=twiml, media_type="application/xml")
 
     update_context(CallSid, {"no_speech_count": 0})
@@ -812,28 +785,9 @@ def collect_speech(
 
     transcript_text = _normalize_transcript_text(raw_transcript_text)
 
-    if settings.demo_mode and should_end_demo(CallSid, settings.max_demo_turns):
-        bot_message = "I have your request. Staff will call back within 2 hours. Goodbye."
-        _append_transcript_line(db, CallSid, "BOT", bot_message)
-        db.commit()
-        _log_bot_turn_quality(CallSid, bot_message, raw_transcript_text)
-        flush_call_notifications(CallSid)
-        cleanup_context(CallSid)
-        return Response(content=_render_bot_hangup_twiml(bot_message), media_type="application/xml")
+    ctx = get_context(CallSid)
 
-    if _should_end_call(transcript_text):
-        pending_count = db.query(Task).filter(Task.call_sid == CallSid, Task.status == "pending").count()
-        if pending_count > 0:
-            bot_message = "Thank you. I have created your request. Our clinic staff will call you back shortly. Goodbye."
-        else:
-            bot_message = "Thank you for calling the clinic. Goodbye."
-        _append_transcript_line(db, CallSid, "BOT", bot_message)
-        db.commit()
-        _log_bot_turn_quality(CallSid, bot_message, raw_transcript_text)
-        flush_call_notifications(CallSid)
-        cleanup_context(CallSid)
-        logger.info("bot_reply call_sid=%s source=end_call text=%r", CallSid, bot_message)
-        return Response(content=_render_bot_hangup_twiml(bot_message), media_type="application/xml")
+
 
     immediate_escalation = _immediate_escalation_reason(transcript_text)
     if immediate_escalation:
@@ -870,24 +824,11 @@ def collect_speech(
             twiml = hold_then_hangup(bot_message, hold_seconds=10)
         return Response(content=twiml, media_type="application/xml")
 
-    status_message = _status_reply(db, CallSid, transcript_text)
-    if status_message:
-        bot_message = f"{status_message} Anything else I can help you with?"
-        _append_transcript_line(db, CallSid, "BOT", bot_message)
-        db.commit()
-        _log_bot_turn_quality(CallSid, bot_message, raw_transcript_text)
-        return Response(
-            content=_render_bot_reply_twiml(
-                bot_message,
-                callback_url,
-                stt_mode=effective_stt_mode,
-              ),
-            media_type="application/xml",
-        )
-
-    request_types = infer_request_types(transcript_text)
+   
+    request_types = infer_request_types(CallSid,transcript_text)
     use_strict_intent_split = len(request_types) > 1
     appt_intent_text = _intent_specific_text(
+        CallSid,
         transcript_text,
         "appointment_scheduling",
         fallback_to_full=not use_strict_intent_split,
@@ -895,6 +836,7 @@ def collect_speech(
     _upsert_pending_appointment_details(db, CallSid, appt_intent_text)
     for request_type in request_types:
         intent_text = _intent_specific_text(
+            CallSid,
             transcript_text,
             request_type,
             fallback_to_full=not use_strict_intent_split,
@@ -908,43 +850,53 @@ def collect_speech(
                 extracted["patient_name"] = full_extracted["patient_name"]
             if not extracted.get("appointment_type") and full_extracted.get("appointment_type"):
                 extracted["appointment_type"] = full_extracted["appointment_type"]
-        _create_or_update_intent_task(
-            db=db,
-            call_sid=CallSid,
-            from_number=From,
-            request_type=request_type,
-            transcript_text=intent_text,
-            extracted=extracted,
-        )
+        
+        ctx = get_context(CallSid)
+        # ✅ prevent legacy auto task creation
+        if ctx.get("state") == "GENERAL":
+            _create_or_update_intent_task(
+                db=db,
+                call_sid=CallSid,
+                from_number=From,
+                request_type=request_type,
+                transcript_text=intent_text,
+                extracted=extracted,
+    )
     db.commit()
 
-    appt_task = (
-    db.query(Task)
-    .filter(
-        Task.call_sid == CallSid,
-        Task.status == "pending",
-        Task.request_type == "appointment_scheduling",
-    )
-    .first()
-)
-
-    if appt_task:
-        extracted = _get_extracted_from_task(appt_task)
-
-        has_name = bool((appt_task.patient_name or "").strip() or extracted.get("patient_name"))
-        has_schedule = bool(extracted.get("preferred_schedule", "").strip())
-
-        if has_name and has_schedule:
-            update_context(CallSid, {"appointment_confirmed": True})
 
     # ⭐ DO NOT SPEAK HERE
     # State machine will generate the response
 
+    # -----------------------------
+    # SYNC ENTITIES TO STATE MACHINE
+    # -----------------------------
+    entities = {}
+
+    extracted = _extract_appointment_details(transcript_text)
+
+    if extracted.get("patient_name"):
+        entities["name"] = extracted["patient_name"]
+
+    if extracted.get("preferred_schedule"):
+        entities["date"] = extracted["preferred_schedule"]
+
+    if extracted.get("appointment_type"):
+        entities["appointment_type"] = extracted["appointment_type"]
+        
+    update_context(CallSid, {"latest_entities": entities})
+
+    
+
     llm_start = perf_counter()
+    logger.info("STATE BEFORE LLM = %s", get_context(CallSid).get("state"))
     llm_reply = generate_controlled_reply(CallSid, transcript_text)
     latency_ms = int((perf_counter() - llm_start) * 1000)
     if llm_reply.fallback_used and llm_reply.openai_status.endswith("_empty_output"):
-        update_context(CallSid, {"failed_turns": int(ctx.get("failed_turns", 0)) + 1})
+        update_context(
+        CallSid,
+        {"failed_turns": int(get_context(CallSid).get("failed_turns", 0)) + 1},
+    )
     else:
         update_context(CallSid, {"failed_turns": 0})
     if (
@@ -952,7 +904,10 @@ def collect_speech(
         or llm_reply.openai_status.endswith("_empty_output")
         or "_http_" in llm_reply.openai_status
     ):
-        update_context(CallSid, {"ai_failures": int(ctx.get("ai_failures", 0)) + 1})
+       update_context(
+        CallSid,
+        {"ai_failures": int(get_context(CallSid).get("ai_failures", 0)) + 1},
+        )
     else:
         update_context(CallSid, {"ai_failures": 0})
 
@@ -1098,4 +1053,6 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
         logger.error("twilio stream failed call_sid=%s error=%s", bridge.call_sid or call_sid_hint or "unknown", str(exc))
     finally:
         await bridge.close()
-        cleanup_context(bridge.call_sid or call_sid_hint or "")
+        sid = bridge.call_sid or call_sid_hint
+        if sid:
+            cleanup_context(sid)
