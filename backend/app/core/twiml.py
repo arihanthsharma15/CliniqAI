@@ -1,5 +1,7 @@
 from xml.etree.ElementTree import Element, SubElement, tostring
 
+from h11 import Response
+
 from app.core.config import settings
 
 
@@ -163,19 +165,21 @@ def hold_and_dial(
     message: str,
     target_number: str,
     hold_music_url: str | None = None,
+    message_audio_url: str | None = None,
     fallback_message: str = "Our team will call you back shortly. Thank you.",
 ) -> str:
     response = Element("Response")
-    say = SubElement(response, "Say")
-    say.text = message
 
-    hold_prompt = SubElement(response, "Say")
-    hold_prompt.text = "Please hold while I connect you to our clinic staff."
-    if hold_music_url:
-        play = SubElement(response, "Play")
-        play.text = hold_music_url
+    if message_audio_url:
+        play_msg = SubElement(response, "Play")
+        play_msg.text = message_audio_url
     else:
-        SubElement(response, "Pause", length="3")
+        say = SubElement(response, "Say")
+        say.text = message
+
+    if hold_music_url:
+        play_hold = SubElement(response, "Play")
+        play_hold.text = hold_music_url
 
     dial = SubElement(response, "Dial", timeout="20", answerOnBridge="true")
     number = SubElement(dial, "Number")

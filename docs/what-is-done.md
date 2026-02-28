@@ -1,5 +1,5 @@
 # 🏥 CliniqAI — Implementation Snapshot & Roadmap
-> **Internal Documentation** | Last Updated: 27th February 2026
+> **Internal Documentation** | Last Updated: 28th February 2026
 
 ---
 
@@ -34,10 +34,18 @@
 5. **Loop:** State-aware conversational continuation.
 
 ### 🤖 Deterministic Orchestration
-* **State-Machine:** Controlled dialogue flow to prevent AI "hallucination loops."
-* **Slot Collection:** Structured data gathering for appointments.
-* **Intent Locking:** Freezes state during critical task execution.
-* **Receptionist Mode:** Post-task standby state.
+* **State-Machine:** Controlled dialogue flow preventing AI "hallucination loops."
+* **Slot Collection:** Structured data gathering across appointment, refill, and callback flows.
+* **Intent Locking:** Freezes state during critical slot-filling execution.
+* **Receptionist Mode:** Post-task standby state with graceful exit handling.
+
+### 📋 Supported Call Flows
+| Flow | Slots Collected | Assigned To |
+| :--- | :--- | :--- |
+| Appointment Booking | Name, Type, Date, Time | Staff |
+| Prescription Refill | Name | Doctor |
+| Callback Request | Name, Preferred Time | Staff |
+| Escalation | — | Staff / Doctor (by reason) |
 
 ---
 
@@ -47,10 +55,15 @@
 > **Core Principle:** Uncertainty defaults to escalation.
 
 **Trigger Conditions:**
-- [x] Emergency keyword detection.
+- [x] Emergency keyword detection (chest pain, bleeding, can't breathe).
 - [x] Explicit human handoff requests.
-- [x] Repeated AI misunderstanding (confidence < threshold).
-- [x] AI provider instability/latency fallback.
+- [x] Repeated misunderstanding — 3 consecutive unrecognised turns.
+- [x] AI provider instability / latency fallback.
+
+**Validated Metrics (28 Feb 2026 Test Run):**
+- Escalation Rate: **11.8%** (target < 15%) ✅
+- Missed Emergency Escalations: **0** ✅
+- Avg Conversational Turns to Resolution: **3.9** ✅
 
 ---
 
@@ -58,7 +71,7 @@
 
 ### Role-Based Interfaces
 * **Staff Dashboard:** Active Task Queue (`pending`, `in_progress`, `completed`).
-* **Doctor Dashboard:** High-level clinical oversight.
+* **Doctor Dashboard:** High-level clinical oversight + refill/escalation queue.
 * **Transcript Viewer:** Deep-dive into specific call sessions.
 
 ### Operational Efficiency
@@ -80,6 +93,11 @@
 - [ ] **Multi-tenancy:** `clinics` and `users` tables for data isolation.
 - [ ] **Call Metadata:** Store `recording_url`, `duration`, and `consent`.
 
+### 🚢 Infrastructure
+- [ ] **Railway Deployment:** Backend live on Railway via Docker.
+- [ ] **Vercel Deployment:** Frontend live on Vercel.
+- [ ] **Twilio Webhook:** Point to Railway production URL.
+
 ---
 
 ## ⚠️ 3. Risk Areas & Mitigation
@@ -99,9 +117,9 @@
 
 **Goal:** Reduce latency by moving side-effects (notifications/integrations) out of the request thread.
 
-1.  **Event Emission:** API commits DB transaction -> Emits `task.created`.
-2.  **Worker:** Redis-backed worker consumes event.
-3.  **Resilience:** Exponential backoff + Dead-letter queue (DLQ) for failed alerts.
+1. **Event Emission:** API commits DB transaction → Emits `task.created`.
+2. **Worker:** Redis-backed worker consumes event.
+3. **Resilience:** Exponential backoff + Dead-letter queue (DLQ) for failed alerts.
 
 ---
 

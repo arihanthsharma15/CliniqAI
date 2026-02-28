@@ -379,7 +379,7 @@ def _assigned_role_for_request(request_type: str, escalation_reason: str | None 
         if escalation_reason == "medical_emergency_keyword":
             return "doctor"
         return "staff"
-    if request_type in {"medication_refill", "prescription_refill", "medical_question"}:
+    if request_type in {"medication_refill", "prescription_refill", "refill", "medical_question"}:
         return "doctor"
     return "staff"
 
@@ -753,15 +753,14 @@ def collect_speech(
         logger.warning("stt_fallback switched_to=twilio")
 
     if not raw_transcript_text:
+        last_state = get_context(CallSid).get("state", "GENERAL")
 
-        # ⭐ allow short-answer retry without looping
-        last_state = get_context(CallSid).get("state")
-
-        if last_state.startswith("APPOINTMENT"):
-            bot_message = "Please say your full name clearly."
+        if last_state == "APPOINTMENT_NAME":
+            bot_message = "I'm sorry, I didn't catch your name. Could you please repeat it?"
+        elif last_state == "POST_TASK":
+            bot_message = "I'm still here. Was there anything else you needed help with?"
         else:
-            bot_message = "I did not catch that clearly. Please say your request again."
-
+            bot_message = "I'm sorry, I didn't hear anything. Could you please repeat your request?"
         update_context(CallSid, {
             "no_speech_count": int(ctx.get("no_speech_count", 0)) + 1
         })
@@ -813,85 +812,105 @@ def collect_speech(
         flush_call_notifications(CallSid)
         cleanup_context(CallSid)
         logger.info("bot_reply call_sid=%s source=immediate_escalation text=%r", CallSid, bot_message)
+        # Generate TTS for escalation message
+        try:
+            audio_bytes = synthesize_tts(bot_message)
+            audio_id = cache_audio(audio_bytes)
+            message_audio_url = f"{settings.public_base_url}/api/calls/tts/{audio_id}"
+            print(f"DEBUG ESCALATION AUDIO URL = {message_audio_url}") 
+        except Exception as e:
+            print(f"DEBUG ESCALATION TTS FAILED = {e}")
+            message_audio_url = None
         transfer_target = _transfer_target_number(immediate_escalation)
         if transfer_target:
             twiml = hold_and_dial(
                 message=bot_message,
                 target_number=transfer_target,
                 hold_music_url=settings.hold_music_url,
+                message_audio_url=message_audio_url, 
             )
         else:
             twiml = hold_then_hangup(bot_message, hold_seconds=10)
         return Response(content=twiml, media_type="application/xml")
 
    
-    request_types = infer_request_types(CallSid,transcript_text)
-    use_strict_intent_split = len(request_types) > 1
-    appt_intent_text = _intent_specific_text(
-        CallSid,
-        transcript_text,
-        "appointment_scheduling",
-        fallback_to_full=not use_strict_intent_split,
-    )
-    _upsert_pending_appointment_details(db, CallSid, appt_intent_text)
-    for request_type in request_types:
-        intent_text = _intent_specific_text(
-            CallSid,
-            transcript_text,
-            request_type,
-            fallback_to_full=not use_strict_intent_split,
-        )
-        if not intent_text.strip():
-            continue
-        extracted = _extract_appointment_details(intent_text) if request_type == "appointment_scheduling" else {}
-        if request_type == "appointment_scheduling":
-            full_extracted = _extract_appointment_details(transcript_text)
-            if not extracted.get("patient_name") and full_extracted.get("patient_name"):
-                extracted["patient_name"] = full_extracted["patient_name"]
-            if not extracted.get("appointment_type") and full_extracted.get("appointment_type"):
-                extracted["appointment_type"] = full_extracted["appointment_type"]
-        
-        ctx = get_context(CallSid)
-        # ✅ prevent legacy auto task creation
-        if ctx.get("state") == "GENERAL":
+    # 1. First, identify what the user wants and extract data
+    request_types = infer_request_types(CallSid, transcript_text)
+    if request_types == ["other"]:
+        update_context(CallSid, {
+            "other_intent_turns": int(get_context(CallSid).get("other_intent_turns", 0)) + 1
+        })
+    else:
+        update_context(CallSid, {"other_intent_turns": 0})
+
+    if int(get_context(CallSid).get("other_intent_turns", 0)) >= 3:
+        _create_escalation_task(db, CallSid, From, "failed_understanding_3_turns", transcript_text)
+        db.commit()
+        update_context(CallSid, {"other_intent_turns": 0})
+        bot_message = "I'm having trouble understanding. Let me connect you to our staff."
+        _append_transcript_line(db, CallSid, "BOT", bot_message)
+        db.commit()
+        try:
+            audio_bytes = synthesize_tts(bot_message)
+            audio_id = cache_audio(audio_bytes)
+            message_audio_url = f"{settings.public_base_url}/api/calls/tts/{audio_id}"
+        except Exception as e:
+            message_audio_url = None
+        flush_call_notifications(CallSid)
+        cleanup_context(CallSid)
+        transfer_target = settings.clinic_staff_number
+        if transfer_target:
+            twiml = hold_and_dial(
+                message=bot_message,
+                target_number=transfer_target,
+                hold_music_url=settings.hold_music_url,
+                message_audio_url=message_audio_url,
+            )
+        else:
+            twiml = hold_then_hangup(bot_message, hold_seconds=10)
+        return Response(content=twiml, media_type="application/xml")
+
+    
+    entities = {}
+    extracted = _extract_appointment_details(transcript_text)
+
+    if extracted.get("patient_name"):
+        entities["name"] = extracted["patient_name"]
+    if extracted.get("preferred_schedule"):
+        entities["date"] = extracted["preferred_schedule"]
+    if extracted.get("appointment_type"):
+        entities["appointment_type"] = extracted["appointment_type"]
+    if extracted.get("preferred_time"):
+        entities["time"] = extracted["preferred_time"]
+
+    # 2. Generate the LLM reply FIRST (This updates the state to POST_TASK if finished)
+    llm_start = perf_counter()
+    logger.info("STATE BEFORE LLM = %s", get_context(CallSid).get("state"))
+    llm_reply, new_state, final_slots = generate_controlled_reply(CallSid, transcript_text)
+    update_context(CallSid, {
+        "state": new_state,
+        "slots": final_slots, 
+        "last_user_text": transcript_text
+    })
+    latency_ms = int((perf_counter() - llm_start) * 1000)
+
+
+    # 3. NOW check if we should create the task in the database
+    # We check the context AFTER the LLM/State Machine has processed the turn
+    current_ctx = get_context(CallSid)
+    if current_ctx.get("state") == "POST_TASK" and not current_ctx.get("task_created"):
+        for request_type in request_types:
             _create_or_update_intent_task(
                 db=db,
                 call_sid=CallSid,
                 from_number=From,
                 request_type=request_type,
-                transcript_text=intent_text,
-                extracted=extracted,
-    )
+                transcript_text=transcript_text,
+                extracted=entities, # Safe to use now!
+            )
+        update_context(CallSid, {"task_created": True})
     db.commit()
 
-
-    # ⭐ DO NOT SPEAK HERE
-    # State machine will generate the response
-
-    # -----------------------------
-    # SYNC ENTITIES TO STATE MACHINE
-    # -----------------------------
-    entities = {}
-
-    extracted = _extract_appointment_details(transcript_text)
-
-    if extracted.get("patient_name"):
-        entities["name"] = extracted["patient_name"]
-
-    if extracted.get("preferred_schedule"):
-        entities["date"] = extracted["preferred_schedule"]
-
-    if extracted.get("appointment_type"):
-        entities["appointment_type"] = extracted["appointment_type"]
-        
-    update_context(CallSid, {"latest_entities": entities})
-
-    
-
-    llm_start = perf_counter()
-    logger.info("STATE BEFORE LLM = %s", get_context(CallSid).get("state"))
-    llm_reply = generate_controlled_reply(CallSid, transcript_text)
-    latency_ms = int((perf_counter() - llm_start) * 1000)
     if llm_reply.fallback_used and llm_reply.openai_status.endswith("_empty_output"):
         update_context(
         CallSid,
