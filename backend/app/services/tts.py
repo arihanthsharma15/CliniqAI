@@ -72,18 +72,32 @@ def synthesize_google_tts(text: str) -> bytes | None:
         return None
     if settings.tts_provider.strip().lower() != "google":
         return None
-    creds_path = (settings.google_tts_credentials_path or "").strip()
-    if not creds_path:
-        return None
-    cred_file = Path(creds_path)
-    if not cred_file.exists():
-        logger.error("Google TTS credentials file not found: %s", creds_path)
-        return None
 
-    credentials = service_account.Credentials.from_service_account_file(
-        str(cred_file),
-        scopes=[GOOGLE_TTS_SCOPE],
-    )
+    import json
+    import os
+
+    # Production: load from base64 env var
+    creds_base64 = os.environ.get("GOOGLE_TTS_CREDENTIALS_BASE64", "").strip()
+    if creds_base64:
+        creds_dict = json.loads(base64.b64decode(creds_base64).decode("utf-8"))
+        credentials = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=[GOOGLE_TTS_SCOPE],
+        )
+    else:
+        # Local dev: load from file path
+        creds_path = (settings.google_tts_credentials_path or "").strip()
+        if not creds_path:
+            return None
+        cred_file = Path(creds_path)
+        if not cred_file.exists():
+            logger.error("Google TTS credentials file not found: %s", creds_path)
+            return None
+        credentials = service_account.Credentials.from_service_account_file(
+            str(cred_file),
+            scopes=[GOOGLE_TTS_SCOPE],
+        )
+
     credentials.refresh(Request())
     if not credentials.token:
         return None
