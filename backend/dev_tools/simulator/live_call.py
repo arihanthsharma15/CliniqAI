@@ -57,7 +57,6 @@ while True:
         },
     )
 
-    match = re.search(AUDIO_PATTERN, r.text)
-
-    if match:
-        play_audio(match.group(1))
+    matches = re.findall(AUDIO_PATTERN, r.text)
+    for url in matches:
+        play_audio(url)
