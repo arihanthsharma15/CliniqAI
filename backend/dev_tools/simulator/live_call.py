@@ -3,7 +3,7 @@ import re
 import subprocess
 from uuid import uuid4
 
-BASE = "http://localhost:8000/api/calls"
+BASE = "https://cliniqai-production.up.railway.app/api/calls"
 CALL_SID = uuid4().hex
 
 AUDIO_PATTERN = r"<Play>(.*?)</Play>"
