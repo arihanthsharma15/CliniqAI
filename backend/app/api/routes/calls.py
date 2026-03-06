@@ -1131,24 +1131,23 @@ def collect_speech(
 
 
 @router.get("/tts/{audio_id}")
-def tts_audio(audio_id: str) -> Response:
+def tts_audio(audio_id: str):
     audio = get_cached_audio(audio_id)
 
     if not audio:
-        file_path = Path("/tmp/tts_cache") / f"{audio_id}.mp3"
-
-        if file_path.exists():
-            audio = file_path.read_bytes()
-
-    if not audio:
         raise HTTPException(status_code=404, detail="Audio not found")
+    
+    print("SERVING AUDIO BYTES =", len(audio))
 
     return Response(
         content=audio,
         media_type="audio/mpeg",
-        headers={"Cache-Control": "no-cache"},
+        headers={
+            "Content-Type": "audio/mpeg",
+            "Content-Length": str(len(audio)),
+            "Cache-Control": "no-cache"
+        }
     )
-
 
 @router.websocket("/stream")
 async def twilio_media_stream(websocket: WebSocket) -> None:
