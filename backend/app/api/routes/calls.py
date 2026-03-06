@@ -679,13 +679,13 @@ def web_chat(payload: WebChatPayload, db: Session = Depends(get_db)):
         
         try:
             audio_bytes = synthesize_tts(greeting)
-            if audio_bytes:
+            if audio_bytes and len(audio_bytes) > 100:  # Valid audio should be > 100 bytes
                 audio_id = cache_audio(audio_bytes)
                 audio_url = f"{settings.public_base_url}/api/calls/tts/{audio_id}"
                 audio_urls.append(audio_url)
-                logger.info("Generated greeting audio: %s", audio_url)
+                logger.info("Generated greeting audio: %s bytes -> %s", len(audio_bytes), audio_url)
             else:
-                logger.warning("TTS synthesis returned empty bytes for greeting")
+                logger.warning("TTS synthesis returned invalid/empty bytes: %s", len(audio_bytes) if audio_bytes else 0)
         except Exception as e:
             logger.error("Failed to synthesize greeting audio: %s", str(e), exc_info=True)
         
@@ -732,9 +732,15 @@ def web_chat(payload: WebChatPayload, db: Session = Depends(get_db)):
     )
 
     twiml = twiml_response.body.decode()
+    logger.info("collect_speech TWIML response length: %d", len(twiml))
 
     play_matches = re.findall(r"<Play[^>]*>(.*?)</Play>", twiml)
     say_matches = re.findall(r"<Say>(.*?)</Say>", twiml)
+    
+    logger.info("Extracted from TWIML: %d Play URLs, %d Say matches", len(play_matches), len(say_matches))
+    if play_matches:
+        for i, url in enumerate(play_matches):
+            logger.info("Play URL %d: %s", i, url)
 
     reply = ""
 
