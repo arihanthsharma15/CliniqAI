@@ -677,17 +677,19 @@ def web_chat(payload: WebChatPayload, db: Session = Depends(get_db)):
         greeting = "Thank you for calling ClinIQ. How can I help you today?"
         audio_urls = []
         
+        logger.info("TTS: Attempting to synthesize greeting, TTS provider: %s", settings.tts_provider)
         try:
             audio_bytes = synthesize_tts(greeting)
+            logger.info("TTS: synthesize_tts returned: %s bytes", len(audio_bytes) if audio_bytes else "None")
             if audio_bytes and len(audio_bytes) > 100:  # Valid audio should be > 100 bytes
                 audio_id = cache_audio(audio_bytes)
                 audio_url = f"{settings.public_base_url}/api/calls/tts/{audio_id}"
                 audio_urls.append(audio_url)
-                logger.info("Generated greeting audio: %s bytes -> %s", len(audio_bytes), audio_url)
+                logger.info("✅ Generated greeting audio: %s bytes -> %s", len(audio_bytes), audio_url)
             else:
-                logger.warning("TTS synthesis returned invalid/empty bytes: %s", len(audio_bytes) if audio_bytes else 0)
+                logger.warning("❌ TTS synthesis returned invalid/empty bytes: %s", len(audio_bytes) if audio_bytes else "None")
         except Exception as e:
-            logger.error("Failed to synthesize greeting audio: %s", str(e), exc_info=True)
+            logger.error("❌ Failed to synthesize greeting audio: %s", str(e), exc_info=True)
         
         _append_transcript_line(db, call_sid, "BOT", greeting)
         increment_turn(call_sid)
