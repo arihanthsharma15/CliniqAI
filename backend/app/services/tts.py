@@ -18,6 +18,8 @@ AUDIO_CACHE: dict[str, tuple[bytes, float]] = {}
 CACHE_TTL_SECONDS = 900
 GOOGLE_TTS_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 logger = logging.getLogger(__name__)
+CACHE_DIR = Path("/tmp/tts_cache")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _cleanup_cache() -> None:
@@ -27,19 +29,30 @@ def _cleanup_cache() -> None:
         AUDIO_CACHE.pop(key, None)
 
 
+
 def cache_audio(audio_bytes: bytes) -> str:
     _cleanup_cache()
     audio_id = uuid4().hex
     AUDIO_CACHE[audio_id] = (audio_bytes, time())
+
+    file_path = CACHE_DIR / f"{audio_id}.mp3"
+    file_path.write_bytes(audio_bytes)
+
     return audio_id
 
 
 def get_cached_audio(audio_id: str) -> bytes | None:
     _cleanup_cache()
+
     item = AUDIO_CACHE.get(audio_id)
-    if not item:
-        return None
-    return item[0]
+    if item:
+        return item[0]
+
+    file_path = CACHE_DIR / f"{audio_id}.mp3"
+    if file_path.exists():
+        return file_path.read_bytes()
+
+    return None
 
 
 def synthesize_elevenlabs(text: str) -> bytes | None:
