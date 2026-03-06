@@ -1135,7 +1135,7 @@ def tts_audio(audio_id: str) -> Response:
     audio = get_cached_audio(audio_id)
 
     if not audio:
-        file_path = Path("tts_cache") / f"{audio_id}.mp3"
+        file_path = Path("/tmp/tts_cache") / f"{audio_id}.mp3"
 
         if file_path.exists():
             audio = file_path.read_bytes()
