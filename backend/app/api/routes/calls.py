@@ -1164,7 +1164,16 @@ def tts_audio(audio_id: str):
         logger.error("Audio not found for ID: %s", audio_id)
         raise HTTPException(status_code=404, detail="Audio not found")
     
-    logger.info("Serving audio: %s bytes", len(audio))
+    # Verify audio data is valid
+    if len(audio) < 100:
+        logger.error("Audio too small: %d bytes for ID %s", len(audio), audio_id)
+        raise HTTPException(status_code=500, detail="Invalid audio data")
+    
+    # Check for MP3 header
+    if not (audio[0:2] == b'\xff\xfb' or audio[0:2] == b'\xff\xfa' or audio[0:3] == b'ID3'):
+        logger.error("Invalid MP3 header for audio ID %s. First bytes: %s", audio_id, audio[0:10].hex())
+    
+    logger.info("Serving audio: ID=%s size=%d bytes, header=%s", audio_id, len(audio), audio[0:10].hex())
 
     return Response(
         content=audio,
