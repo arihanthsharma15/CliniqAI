@@ -8,6 +8,7 @@ import { ScrollToTop } from "./components/common/ScrollToTop";
 import OperationsDashboard from "./pages/Dashboard/OperationsDashboard";
 import { useAuth } from "./context/AuthContext";
 import type { DemoRole } from "./context/AuthContext";
+import SimulatePage from "./pages/Simulate/SimulatePage";
 
 function ProtectedLayout() {
   const { user } = useAuth();
@@ -54,6 +55,7 @@ export default function App() {
 
         <Route path="/signin" element={user ? <Navigate to="/" replace /> : <SignIn />} />
         <Route path="/signup" element={<SignUp />} />
+        <Route path="/simulate" element={<SimulatePage />} />
 
         <Route path="*" element={<NotFound />} />
       </Routes>
