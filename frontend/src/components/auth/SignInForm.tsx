@@ -24,7 +24,23 @@ function speakText(text: string, onSpeakStart?: () => void, onSpeakEnd?: () => v
     window.speechSynthesis.cancel();
     console.log("🔊 Cancelled previous speech");
     
+    // Get available voices
+    const voices = window.speechSynthesis.getVoices();
+    console.log("🎤 Available voices:", voices.length);
+    if (voices.length === 0) {
+      console.warn("⚠️  No voices available, waiting for voices to load...");
+      window.speechSynthesis.onvoiceschanged = () => {
+        const newVoices = window.speechSynthesis.getVoices();
+        console.log("🎤 Voices loaded:", newVoices.length);
+        speakText(text, onSpeakStart, onSpeakEnd);
+      };
+      return;
+    }
+    
     const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Use first available voice
+    utterance.voice = voices[0];
     utterance.rate = 1;
     utterance.pitch = 1;
     utterance.volume = 1;
@@ -45,6 +61,7 @@ function speakText(text: string, onSpeakStart?: () => void, onSpeakEnd?: () => v
     };
     
     console.log("🗣️ Speaking text:", text);
+    console.log("🎤 Using voice:", utterance.voice?.name);
     console.log("🔊 Speech synthesis pending:", window.speechSynthesis.pending);
     console.log("🔊 Speech synthesis speaking:", window.speechSynthesis.speaking);
     
