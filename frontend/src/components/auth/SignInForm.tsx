@@ -6,8 +6,7 @@ import Label from "../form/Label";
 import Input from "../form/input/InputField";
 import Checkbox from "../form/input/Checkbox";
 import { demoAccounts, useAuth } from "../../context/AuthContext";
-import { startCall, sendMessage } from "../../services/simulateApi";
-
+import { sendMessage } from "../../services/simulateApi";
 type Message = { role: "bot" | "patient"; text: string };
 
 function generateCallSid(): string {
@@ -17,16 +16,31 @@ function generateCallSid(): string {
 async function playAudioUrl(url: string): Promise<void> {
   return new Promise((resolve) => {
     const audio = new Audio(url);
+
+    audio.volume = 1.0;
+
     audio.onended = () => resolve();
-    audio.onerror = () => resolve();
-    audio.play().catch(() => resolve());
+
+    audio.onerror = (e) => {
+      console.error("Audio failed:", url, e);
+      resolve();
+    };
+
+    audio.play()
+      .then(() => console.log("Playing:", url))
+      .catch((err) => {
+        console.error("Autoplay blocked:", err);
+        resolve();
+      });
   });
 }
+
+
 
 function SimulateModal({ onClose }: { onClose: () => void }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [callSid] = useState(() => generateCallSid());
+  const [callSid, setCallSid] = useState(() => generateCallSid());
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [botTyping, setBotTyping] = useState(false);
@@ -37,46 +51,81 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
   }, [messages, botTyping]);
 
   async function handleStart() {
-    setLoading(true);
-    try {
-      const audioUrl = await startCall(callSid);
-      setStarted(true);
-      setBotTyping(true);
-      await new Promise((r) => setTimeout(r, 800));
-      setBotTyping(false);
-      setMessages([{ role: "bot", text: "Thank you for calling ClinIQ. How can I help you today?" }]);
-      if (audioUrl) playAudioUrl(audioUrl);
-    } catch {
-      alert("Could not connect to backend.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleSend() {
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim();
-    setInput("");
-    setMessages((prev) => [...prev, { role: "patient", text: userMsg }]);
+  setMessages([]);
+  setInput("");
+  setCallSid(generateCallSid());
+  setLoading(true);
+  try {
+    setStarted(true);
     setBotTyping(true);
-    setLoading(true);
-    try {
-      const audioUrls = await sendMessage(callSid, userMsg);
-      await new Promise((r) => setTimeout(r, 600));
-      setBotTyping(false);
-      if (audioUrls.length > 0) {
-        setMessages((prev) => [...prev, { role: "bot", text: "🔊 Bot is responding..." }]);
-        for (const url of audioUrls) await playAudioUrl(url);
-      } else {
-        setMessages((prev) => [...prev, { role: "bot", text: "..." }]);
+
+    await new Promise((r) => setTimeout(r, 800));
+
+    setBotTyping(false);
+
+    setMessages([
+      {
+        role: "bot",
+        text: "Thank you for calling ClinIQ. How can I help you today?"
       }
-    } catch {
-      setBotTyping(false);
-      setMessages((prev) => [...prev, { role: "bot", text: "⚠️ Error reaching backend." }]);
-    } finally {
-      setLoading(false);
-    }
+    ]);
+  } catch {
+    alert("Could not connect to backend.");
+  } finally {
+    setLoading(false);
   }
+}
+
+async function handleSend() {
+  if (!input.trim() || loading || botTyping) return;
+
+  const userMsg = input.trim();
+
+  setInput("");
+  setMessages((prev) => [...prev, { role: "patient", text: userMsg }]);
+
+  setBotTyping(true);
+  setLoading(true);
+
+  try {
+    const data = await sendMessage(callSid, userMsg);
+
+    await new Promise((r) => setTimeout(r, 600));
+
+    setBotTyping(false);
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "bot",
+        text: data.reply || "..."
+      }
+    ]);
+
+   if (data.audio_urls?.length > 0) {
+  for (const url of data.audio_urls) {
+    await playAudioUrl(url);
+  }
+}
+
+ if (data.ended) {
+  setStarted(false);
+  setCallSid(generateCallSid());
+}
+  } catch {
+    setBotTyping(false);
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "bot",
+        text: "⚠️ Error reaching backend."
+      }
+    ]);
+  } finally {
+    setLoading(false);
+  }
+}
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
@@ -279,15 +328,18 @@ export default function SignInForm() {
 
               {/* Try Demo Button */}
               <div className="mt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowSimulate(true)}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 px-4 py-3 text-sm font-medium text-emerald-500 transition hover:bg-emerald-600/10"
-                >
-                  📞 Try as Patient (Live Demo)
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowSimulate(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 px-4 py-3 text-sm font-medium text-emerald-500 transition hover:bg-emerald-600/10"
+              >
+               📞 Try as Patient (Live Demo)
+              </button>
 
+              <p className="mt-2 text-center text-xs text-gray-500 dark:text-gray-400">
+                 Live browser simulation for full patient interaction
+                </p>
+            </div>
               <div className="mt-5">
                 <p className="text-sm font-normal text-center text-gray-700 dark:text-gray-400 sm:text-start">
                   Don&apos;t have an account? {""}

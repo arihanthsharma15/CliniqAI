@@ -128,3 +128,31 @@
 * **Evaluation:** Move to **ElevenLabs** only if A/B testing shows significant patient experience improvement vs. cost.
 
 ---
+
+---
+
+## 🎧 6. Live Patient Simulation Layer (Web Demo)
+
+> Browser-based interactive testing layer built for real-time interviewer/demo validation.
+
+### ✅ Current Capability
+- Embedded **Patient Simulator Modal** directly on sign-in screen.
+- Full browser conversation with backend through `/api/calls/web-chat`.
+- Real-time bot response rendering with synchronized TTS playback.
+- Session-safe call lifecycle using generated `call_sid`.
+- Automatic reset after terminal call state (`goodbye`).
+
+### 🔊 Audio Behavior
+- Twilio-generated `<Play>` audio URLs are extracted and played sequentially in browser.
+- Browser fallback preserves text even if audio fails.
+- Final goodbye state closes active session cleanly.
+
+### 🧠 Conversation Integrity
+- Same backend orchestration used by live Twilio calls.
+- State-machine remains identical across:
+  - Phone call
+  - Web simulator
+
+### 🎯 Demo Value
+- Testing complete flow without phone dependency is possible.
+- Appointment booking, callback request, refill flow, escalation all reproducible live.

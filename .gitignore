@@ -15,3 +15,17 @@ tts_cache/
 
 # OS
 .DS_Store
+
+# Frontend
+node_modules/
+dist/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+
+# Database
+*.db
+*.sqlite3
