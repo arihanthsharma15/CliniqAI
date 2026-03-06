@@ -92,29 +92,42 @@ def synthesize_google_tts(text: str) -> bytes | None:
     # Production: load from base64 env var
     creds_base64 = os.environ.get("GOOGLE_TTS_CREDENTIALS_BASE64", "").strip()
     if creds_base64:
-        creds_dict = json.loads(base64.b64decode(creds_base64).decode("utf-8"))
-        print("BASE64 LENGTH =", len(creds_base64))
-        print("CREDS LOADED =", "client_email" in creds_dict)
-        credentials = service_account.Credentials.from_service_account_info(
-            creds_dict,
-            scopes=[GOOGLE_TTS_SCOPE],
-        )
+        try:
+            creds_dict = json.loads(base64.b64decode(creds_base64).decode("utf-8"))
+            logger.info("Loaded Google TTS credentials from BASE64 env var")
+            credentials = service_account.Credentials.from_service_account_info(
+                creds_dict,
+                scopes=[GOOGLE_TTS_SCOPE],
+            )
+        except Exception as e:
+            logger.error("Failed to parse GOOGLE_TTS_CREDENTIALS_BASE64: %s", str(e), exc_info=True)
+            return None
     else:
         # Local dev: load from file path
         creds_path = (settings.google_tts_credentials_path or "").strip()
         if not creds_path:
+            logger.error("No GOOGLE_TTS_CREDENTIALS_BASE64 env var and no google_tts_credentials_path config")
             return None
         cred_file = Path(creds_path)
         if not cred_file.exists():
             logger.error("Google TTS credentials file not found: %s", creds_path)
             return None
-        credentials = service_account.Credentials.from_service_account_file(
-            str(cred_file),
-            scopes=[GOOGLE_TTS_SCOPE],
-        )
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                str(cred_file),
+                scopes=[GOOGLE_TTS_SCOPE],
+            )
+        except Exception as e:
+            logger.error("Failed to load credentials from file: %s", str(e), exc_info=True)
+            return None
 
-    credentials.refresh(Request())
-    if not credentials.token:
+    try:
+        credentials.refresh(Request())
+        if not credentials.token:
+            logger.error("Failed to get credentials token")
+            return None
+    except Exception as e:
+        logger.error("Failed to refresh credentials: %s", str(e), exc_info=True)
         return None
 
     headers = {
@@ -132,16 +145,21 @@ def synthesize_google_tts(text: str) -> bytes | None:
         },
     }
 
-    with httpx.Client(timeout=12.0) as client:
-        resp = client.post("https://texttospeech.googleapis.com/v1/text:synthesize", headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        print("GOOGLE RESPONSE =", data)
+    try:
+        with httpx.Client(timeout=12.0) as client:
+            resp = client.post("https://texttospeech.googleapis.com/v1/text:synthesize", headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info("Google TTS synthesis successful: %d bytes", len(data.get("audioContent", "")))
 
-    audio_b64 = data.get("audioContent")
-    if not isinstance(audio_b64, str) or not audio_b64:
+        audio_b64 = data.get("audioContent")
+        if not isinstance(audio_b64, str) or not audio_b64:
+            logger.error("No audioContent in Google TTS response")
+            return None
+        return base64.b64decode(audio_b64)
+    except Exception as e:
+        logger.error("Google TTS API call failed: %s", str(e), exc_info=True)
         return None
-    return base64.b64decode(audio_b64)
 
 
 def synthesize_tts(text: str) -> bytes | None:
