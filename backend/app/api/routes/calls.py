@@ -38,6 +38,7 @@ from app.services.context import (
 from app.services.tts import cache_audio, get_cached_audio, synthesize_tts
 from app.services.llm import generate_controlled_reply
 from pydantic import BaseModel
+from pathlib import Path
 
 class WebChatPayload(BaseModel):
     session_id: str
@@ -1132,13 +1133,21 @@ def collect_speech(
 @router.get("/tts/{audio_id}")
 def tts_audio(audio_id: str) -> Response:
     audio = get_cached_audio(audio_id)
+
+    if not audio:
+        file_path = Path("tts_cache") / f"{audio_id}.mp3"
+
+        if file_path.exists():
+            audio = file_path.read_bytes()
+
     if not audio:
         raise HTTPException(status_code=404, detail="Audio not found")
+
     return Response(
-    content=audio,
-    media_type="audio/mpeg",
-    headers={"Cache-Control": "no-cache"}
-)
+        content=audio,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @router.websocket("/stream")
