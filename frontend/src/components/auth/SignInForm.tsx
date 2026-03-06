@@ -13,6 +13,28 @@ function generateCallSid(): string {
   return Math.random().toString(36).substring(2, 18).toUpperCase();
 }
 
+function speakText(text: string): void {
+  if (!('speechSynthesis' in window)) {
+    console.log("🔇 Speech synthesis not supported");
+    return;
+  }
+  
+  try {
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    
+    console.log("🗣️  Speaking text:", text);
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.error("❌ Speech synthesis failed:", err);
+  }
+}
+
 async function playAudioUrl(url: string): Promise<void> {
   return new Promise((resolve) => {
     try {
@@ -21,6 +43,13 @@ async function playAudioUrl(url: string): Promise<void> {
 
       audio.volume = 1.0;
       audio.crossOrigin = "anonymous";
+
+      let playStarted = false;
+
+      audio.onplay = () => {
+        playStarted = true;
+        console.log("▶️  Audio play() called successfully");
+      };
 
       audio.onended = () => {
         console.log("✅ Audio playback completed");
@@ -32,18 +61,21 @@ async function playAudioUrl(url: string): Promise<void> {
         resolve();
       };
 
-      audio.ontimeupdate = () => {
-        if (audio.currentTime > 0) {
-          console.log("🔊 Audio playing, duration:", audio.duration, "current:", audio.currentTime);
-        }
-      };
-
       audio.play()
-        .then(() => console.log("▶️  Audio play() called successfully"))
+        .then(() => {
+          playStarted = true;
+          console.log("▶️  Audio play() promise resolved");
+        })
         .catch((err) => {
           console.error("❌ Audio play() failed:", err);
           resolve();
         });
+
+      // Timeout safety - resolve after max duration
+      setTimeout(() => {
+        console.log("⏱️  Audio playback timeout (assumed complete)");
+        resolve();
+      }, 15000);
     } catch (err) {
       console.error("❌ Error creating audio:", err);
       resolve();
@@ -91,10 +123,16 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
         }
       ]);
 
+      // Play audio if available, otherwise use text-to-speech fallback
       if (data.audio_urls?.length > 0) {
+        console.log("🎵 Playing audio URLs");
         for (const url of data.audio_urls) {
           await playAudioUrl(url);
         }
+      } else {
+        console.log("🔊 No audio URLs, using text-to-speech fallback");
+        speakText(greetingText);
+        await new Promise((r) => setTimeout(r, 2000));
       }
     } catch (audioErr) {
       console.error("Failed to initialize greeting:", audioErr);
@@ -105,6 +143,7 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
           text: "Thank you for calling ClinIQ. How can I help you today?"
         }
       ]);
+      speakText("Thank you for calling ClinIQ. How can I help you today?");
     }
   } catch {
     alert("Could not connect to backend.");
@@ -139,16 +178,22 @@ async function handleSend() {
       }
     ]);
 
-   if (data.audio_urls?.length > 0) {
-  for (const url of data.audio_urls) {
-    await playAudioUrl(url);
-  }
-}
+    // Play audio if available, otherwise use text-to-speech fallback
+    if (data.audio_urls?.length > 0) {
+      console.log("🎵 Playing audio URLs");
+      for (const url of data.audio_urls) {
+        await playAudioUrl(url);
+      }
+    } else if (data.reply) {
+      console.log("🔊 No audio URLs, using text-to-speech fallback");
+      speakText(data.reply);
+      await new Promise((r) => setTimeout(r, 1500));
+    }
 
- if (data.ended) {
-  setStarted(false);
-  setCallSid(generateCallSid());
-}
+    if (data.ended) {
+      setStarted(false);
+      setCallSid(generateCallSid());
+    }
   } catch {
     setBotTyping(false);
 
