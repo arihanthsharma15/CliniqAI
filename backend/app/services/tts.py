@@ -32,6 +32,17 @@ def _cleanup_cache() -> None:
 
 def cache_audio(audio_bytes: bytes) -> str:
     _cleanup_cache()
+    
+    if not audio_bytes:
+        logger.error("Attempting to cache empty audio bytes")
+        return ""
+    
+    if len(audio_bytes) < 100:
+        logger.error("Audio bytes too small: %d bytes", len(audio_bytes))
+    
+    # Log audio header for debugging
+    logger.info("Caching audio: %d bytes, header=%s", len(audio_bytes), audio_bytes[0:10].hex())
+    
     audio_id = uuid4().hex
     AUDIO_CACHE[audio_id] = (audio_bytes, time())
 
@@ -150,13 +161,16 @@ def synthesize_google_tts(text: str) -> bytes | None:
             resp = client.post("https://texttospeech.googleapis.com/v1/text:synthesize", headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            logger.info("Google TTS synthesis successful: %d bytes", len(data.get("audioContent", "")))
-
+            
         audio_b64 = data.get("audioContent")
         if not isinstance(audio_b64, str) or not audio_b64:
-            logger.error("No audioContent in Google TTS response")
+            logger.error("No audioContent in Google TTS response. Response keys: %s", list(data.keys()))
             return None
-        return base64.b64decode(audio_b64)
+        
+        audio_bytes = base64.b64decode(audio_b64)
+        logger.info("Google TTS synthesis successful: %d bytes from base64 string %d chars", 
+                   len(audio_bytes), len(audio_b64))
+        return audio_bytes
     except Exception as e:
         logger.error("Google TTS API call failed: %s", str(e), exc_info=True)
         return None
