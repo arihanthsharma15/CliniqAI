@@ -15,23 +15,39 @@ function generateCallSid(): string {
 
 async function playAudioUrl(url: string): Promise<void> {
   return new Promise((resolve) => {
-    const audio = new Audio(url);
+    try {
+      console.log("📢 Starting audio playback:", url);
+      const audio = new Audio(url);
 
-    audio.volume = 1.0;
+      audio.volume = 1.0;
+      audio.crossOrigin = "anonymous";
 
-    audio.onended = () => resolve();
-
-    audio.onerror = (e) => {
-      console.error("Audio failed:", url, e);
-      resolve();
-    };
-
-    audio.play()
-      .then(() => console.log("Playing:", url))
-      .catch((err) => {
-        console.error("Autoplay blocked:", err);
+      audio.onended = () => {
+        console.log("✅ Audio playback completed");
         resolve();
-      });
+      };
+
+      audio.onerror = (e) => {
+        console.error("❌ Audio failed to load:", url, e);
+        resolve();
+      };
+
+      audio.ontimeupdate = () => {
+        if (audio.currentTime > 0) {
+          console.log("🔊 Audio playing, duration:", audio.duration, "current:", audio.currentTime);
+        }
+      };
+
+      audio.play()
+        .then(() => console.log("▶️  Audio play() called successfully"))
+        .catch((err) => {
+          console.error("❌ Audio play() failed:", err);
+          resolve();
+        });
+    } catch (err) {
+      console.error("❌ Error creating audio:", err);
+      resolve();
+    }
   });
 }
 
@@ -53,7 +69,8 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
   async function handleStart() {
   setMessages([]);
   setInput("");
-  setCallSid(generateCallSid());
+  const newCallSid = generateCallSid();
+  setCallSid(newCallSid);
   setLoading(true);
   try {
     setStarted(true);
@@ -61,14 +78,34 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
 
     await new Promise((r) => setTimeout(r, 800));
 
-    setBotTyping(false);
+    // Send empty/start message to initialize context and get greeting with audio
+    try {
+      const data = await sendMessage(newCallSid, "");
+      setBotTyping(false);
+      
+      const greetingText = data.reply || "Thank you for calling ClinIQ. How can I help you today?";
+      setMessages([
+        {
+          role: "bot",
+          text: greetingText
+        }
+      ]);
 
-    setMessages([
-      {
-        role: "bot",
-        text: "Thank you for calling ClinIQ. How can I help you today?"
+      if (data.audio_urls?.length > 0) {
+        for (const url of data.audio_urls) {
+          await playAudioUrl(url);
+        }
       }
-    ]);
+    } catch (audioErr) {
+      console.error("Failed to initialize greeting:", audioErr);
+      setBotTyping(false);
+      setMessages([
+        {
+          role: "bot",
+          text: "Thank you for calling ClinIQ. How can I help you today?"
+        }
+      ]);
+    }
   } catch {
     alert("Could not connect to backend.");
   } finally {
