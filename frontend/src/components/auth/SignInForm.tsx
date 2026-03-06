@@ -13,25 +13,48 @@ function generateCallSid(): string {
   return Math.random().toString(36).substring(2, 18).toUpperCase();
 }
 
-function speakText(text: string): void {
+function speakText(text: string, onSpeakStart?: () => void, onSpeakEnd?: () => void): void {
   if (!('speechSynthesis' in window)) {
-    console.log("🔇 Speech synthesis not supported");
+    console.error("🔇 Speech synthesis not supported in this browser");
     return;
   }
   
   try {
     // Cancel any ongoing speech
     window.speechSynthesis.cancel();
+    console.log("🔊 Cancelled previous speech");
     
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1;
     utterance.pitch = 1;
     utterance.volume = 1;
     
-    console.log("🗣️  Speaking text:", text);
+    utterance.onstart = () => {
+      console.log("🗣️ Speech synthesis started");
+      onSpeakStart?.();
+    };
+    
+    utterance.onend = () => {
+      console.log("✅ Speech synthesis ended");
+      onSpeakEnd?.();
+    };
+    
+    utterance.onerror = (event) => {
+      console.error("❌ Speech synthesis error:", event.error);
+      onSpeakEnd?.();
+    };
+    
+    console.log("🗣️ Speaking text:", text);
+    console.log("🔊 Speech synthesis pending:", window.speechSynthesis.pending);
+    console.log("🔊 Speech synthesis speaking:", window.speechSynthesis.speaking);
+    
     window.speechSynthesis.speak(utterance);
+    
+    console.log("✅ Speech utterance queued");
+    console.log("🔊 Speech synthesis speaking after call:", window.speechSynthesis.speaking);
   } catch (err) {
-    console.error("❌ Speech synthesis failed:", err);
+    console.error("❌ Speech synthesis error:", err);
+    onSpeakEnd?.();
   }
 }
 
@@ -97,6 +120,7 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [botTyping, setBotTyping] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -143,12 +167,12 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
         // If audio failed, use text-to-speech
         if (!audioPlayed) {
           console.log("🔊 Audio playback failed, using text-to-speech fallback");
-          speakText(greetingText);
+          speakText(greetingText, () => setIsSpeaking(true), () => setIsSpeaking(false));
           await new Promise((r) => setTimeout(r, 2000));
         }
       } else {
         console.log("🔊 No audio URLs, using text-to-speech fallback");
-        speakText(greetingText);
+        speakText(greetingText, () => setIsSpeaking(true), () => setIsSpeaking(false));
         await new Promise((r) => setTimeout(r, 2000));
       }
     } catch (audioErr) {
@@ -160,7 +184,7 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
           text: "Thank you for calling ClinIQ. How can I help you today?"
         }
       ]);
-      speakText("Thank you for calling ClinIQ. How can I help you today?");
+      speakText("Thank you for calling ClinIQ. How can I help you today?", () => setIsSpeaking(true), () => setIsSpeaking(false));
     }
   } catch {
     alert("Could not connect to backend.");
@@ -210,12 +234,12 @@ async function handleSend() {
       // If audio failed, use text-to-speech
       if (!audioPlayed && data.reply) {
         console.log("🔊 Audio playback failed, using text-to-speech fallback");
-        speakText(data.reply);
+        speakText(data.reply, () => setIsSpeaking(true), () => setIsSpeaking(false));
         await new Promise((r) => setTimeout(r, 1500));
       }
     } else if (data.reply) {
       console.log("🔊 No audio URLs, using text-to-speech fallback");
-      speakText(data.reply);
+      speakText(data.reply, () => setIsSpeaking(true), () => setIsSpeaking(false));
       await new Promise((r) => setTimeout(r, 1500));
     }
 
@@ -246,6 +270,9 @@ async function handleSend() {
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-emerald-400 text-xs tracking-widest uppercase font-mono">ClinIQ — Patient Simulator</span>
+            {isSpeaking && (
+              <span className="text-emerald-400 text-xs ml-2">🔊 Speaking...</span>
+            )}
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
         </div>
