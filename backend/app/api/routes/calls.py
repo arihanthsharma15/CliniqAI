@@ -37,6 +37,11 @@ from app.services.context import (
 )
 from app.services.tts import cache_audio, get_cached_audio, synthesize_tts
 from app.services.llm import generate_controlled_reply
+from pydantic import BaseModel
+
+class WebChatPayload(BaseModel):
+    session_id: str
+    message: str
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -627,6 +632,105 @@ def connect_call(
     db.commit()
     return {"call_sid": call_sid, "status": "connected"}
 
+@router.post("/web-chat")
+def web_chat(payload: WebChatPayload, db: Session = Depends(get_db)):
+    call_sid = payload.session_id
+
+    call = db.query(Call).filter(Call.call_sid == call_sid).first()
+
+    if not call:
+        call = Call(
+            call_sid=call_sid,
+            from_number="web-user",
+            to_number="web-ui",
+            status="connected",
+        )
+        db.add(call)
+        db.commit()
+
+        update_context(
+            call_sid,
+            {
+                "stt_mode": "web",
+                "stt_empty_turns": 0,
+                "turn_count": 0,
+                "appointment_confirmed": False,
+                "state": "GENERAL",
+            },
+        )
+
+    closing_words = {
+        "no",
+        "no thanks",
+        "no thank you",
+        "that's all",
+        "that is all",
+        "nothing else",
+    }
+
+    ctx = get_context(call_sid)
+    user_msg = payload.message.strip().lower()
+
+    if any(word in user_msg for word in closing_words) and ctx.get("state") == "POST_TASK":
+        goodbye = "Thank you for calling CliniqAI. Goodbye."
+
+        _append_transcript_line(db, call_sid, "USER", payload.message)
+        _append_transcript_line(db, call_sid, "BOT", goodbye)
+
+        audio_urls = []
+
+        try:
+            audio_bytes = synthesize_tts(goodbye)
+            audio_id = cache_audio(audio_bytes)
+            audio_urls.append(f"{settings.public_base_url}/api/calls/tts/{audio_id}")
+        except Exception:
+            pass
+
+        cleanup_context(call_sid)
+        db.commit()
+
+        return {
+            "reply": goodbye,
+            "audio_urls": audio_urls,
+            "ended": True,
+        }
+
+    twiml_response = collect_speech(
+        CallSid=call_sid,
+        From="web-user",
+        SpeechResult=payload.message,
+        Confidence=0.95,
+        stt_mode="web",
+        db=db,
+    )
+
+    twiml = twiml_response.body.decode()
+
+    play_matches = re.findall(r"<Play[^>]*>(.*?)</Play>", twiml)
+    say_matches = re.findall(r"<Say>(.*?)</Say>", twiml)
+
+    reply = ""
+
+    latest_transcript = (
+        db.query(Transcript)
+        .filter(Transcript.call_sid == call_sid)
+        .order_by(Transcript.id.desc())
+        .first()
+    )
+
+    if latest_transcript and latest_transcript.text:
+        lines = latest_transcript.text.strip().split("\n")
+        bot_lines = [line for line in lines if line.startswith("BOT:")]
+        if bot_lines:
+            reply = bot_lines[-1].replace("BOT:", "").strip()
+
+    if not reply and say_matches:
+        reply = say_matches[0]
+
+    return {
+        "reply": reply,
+        "audio_urls": play_matches,
+    }
 
 
 
@@ -1030,7 +1134,11 @@ def tts_audio(audio_id: str) -> Response:
     audio = get_cached_audio(audio_id)
     if not audio:
         raise HTTPException(status_code=404, detail="Audio not found")
-    return Response(content=audio, media_type="audio/mpeg")
+    return Response(
+    content=audio,
+    media_type="audio/mpeg",
+    headers={"Cache-Control": "no-cache"}
+)
 
 
 @router.websocket("/stream")
