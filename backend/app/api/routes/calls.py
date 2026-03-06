@@ -677,19 +677,17 @@ def web_chat(payload: WebChatPayload, db: Session = Depends(get_db)):
         greeting = "Thank you for calling ClinIQ. How can I help you today?"
         audio_urls = []
         
-        logger.info("TTS: Attempting to synthesize greeting, TTS provider: %s", settings.tts_provider)
         try:
             audio_bytes = synthesize_tts(greeting)
-            logger.info("TTS: synthesize_tts returned: %s bytes", len(audio_bytes) if audio_bytes else "None")
-            if audio_bytes and len(audio_bytes) > 100:  # Valid audio should be > 100 bytes
+            if audio_bytes and len(audio_bytes) > 100:
                 audio_id = cache_audio(audio_bytes)
                 audio_url = f"{settings.public_base_url}/api/calls/tts/{audio_id}"
                 audio_urls.append(audio_url)
-                logger.info("✅ Generated greeting audio: %s bytes -> %s", len(audio_bytes), audio_url)
+                logger.info("Generated greeting audio: %s bytes", len(audio_bytes))
             else:
-                logger.warning("❌ TTS synthesis returned invalid/empty bytes: %s", len(audio_bytes) if audio_bytes else "None")
+                logger.warning("TTS synthesis returned invalid/empty bytes")
         except Exception as e:
-            logger.error("❌ Failed to synthesize greeting audio: %s", str(e), exc_info=True)
+            logger.error("Failed to synthesize greeting audio: %s", str(e), exc_info=True)
         
         _append_transcript_line(db, call_sid, "BOT", greeting)
         increment_turn(call_sid)
@@ -1172,17 +1170,6 @@ def tts_audio(audio_id: str):
         logger.error("Audio not found for ID: %s", audio_id)
         raise HTTPException(status_code=404, detail="Audio not found")
     
-    # Verify audio data is valid
-    if len(audio) < 100:
-        logger.error("Audio too small: %d bytes for ID %s", len(audio), audio_id)
-        raise HTTPException(status_code=500, detail="Invalid audio data")
-    
-    # Check for MP3 header
-    if not (audio[0:2] == b'\xff\xfb' or audio[0:2] == b'\xff\xfa' or audio[0:3] == b'ID3'):
-        logger.error("Invalid MP3 header for audio ID %s. First bytes: %s", audio_id, audio[0:10].hex())
-    
-    logger.info("Serving audio: ID=%s size=%d bytes, header=%s", audio_id, len(audio), audio[0:10].hex())
-
     return Response(
         content=audio,
         media_type="audio/mpeg",
