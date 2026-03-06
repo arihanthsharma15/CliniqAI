@@ -93,6 +93,8 @@ def synthesize_google_tts(text: str) -> bytes | None:
     creds_base64 = os.environ.get("GOOGLE_TTS_CREDENTIALS_BASE64", "").strip()
     if creds_base64:
         creds_dict = json.loads(base64.b64decode(creds_base64).decode("utf-8"))
+        print("BASE64 LENGTH =", len(creds_base64))
+        print("CREDS LOADED =", "client_email" in creds_dict)
         credentials = service_account.Credentials.from_service_account_info(
             creds_dict,
             scopes=[GOOGLE_TTS_SCOPE],
@@ -134,6 +136,7 @@ def synthesize_google_tts(text: str) -> bytes | None:
         resp = client.post("https://texttospeech.googleapis.com/v1/text:synthesize", headers=headers, json=payload)
         resp.raise_for_status()
         data = resp.json()
+        print("GOOGLE RESPONSE =", data)
 
     audio_b64 = data.get("audioContent")
     if not isinstance(audio_b64, str) or not audio_b64:
