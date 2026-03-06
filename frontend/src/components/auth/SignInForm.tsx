@@ -44,10 +44,7 @@ async function playAudioUrl(url: string): Promise<void> {
       audio.volume = 1.0;
       audio.crossOrigin = "anonymous";
 
-      let playStarted = false;
-
       audio.onplay = () => {
-        playStarted = true;
         console.log("▶️  Audio play() called successfully");
       };
 
@@ -63,7 +60,6 @@ async function playAudioUrl(url: string): Promise<void> {
 
       audio.play()
         .then(() => {
-          playStarted = true;
           console.log("▶️  Audio play() promise resolved");
         })
         .catch((err) => {
