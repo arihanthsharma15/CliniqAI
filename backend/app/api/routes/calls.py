@@ -679,10 +679,15 @@ def web_chat(payload: WebChatPayload, db: Session = Depends(get_db)):
         
         try:
             audio_bytes = synthesize_tts(greeting)
-            audio_id = cache_audio(audio_bytes)
-            audio_urls.append(f"{settings.public_base_url}/api/calls/tts/{audio_id}")
+            if audio_bytes:
+                audio_id = cache_audio(audio_bytes)
+                audio_url = f"{settings.public_base_url}/api/calls/tts/{audio_id}"
+                audio_urls.append(audio_url)
+                logger.info("Generated greeting audio: %s", audio_url)
+            else:
+                logger.warning("TTS synthesis returned empty bytes for greeting")
         except Exception as e:
-            logger.error("Failed to synthesize greeting audio: %s", str(e))
+            logger.error("Failed to synthesize greeting audio: %s", str(e), exc_info=True)
         
         _append_transcript_line(db, call_sid, "BOT", greeting)
         increment_turn(call_sid)
@@ -1156,9 +1161,10 @@ def tts_audio(audio_id: str):
     audio = get_cached_audio(audio_id)
 
     if not audio:
+        logger.error("Audio not found for ID: %s", audio_id)
         raise HTTPException(status_code=404, detail="Audio not found")
     
-    print("SERVING AUDIO BYTES =", len(audio))
+    logger.info("Serving audio: %s bytes", len(audio))
 
     return Response(
         content=audio,
@@ -1166,7 +1172,10 @@ def tts_audio(audio_id: str):
         headers={
             "Content-Type": "audio/mpeg",
             "Content-Length": str(len(audio)),
-            "Cache-Control": "no-cache"
+            "Cache-Control": "no-cache",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
         }
     )
 
