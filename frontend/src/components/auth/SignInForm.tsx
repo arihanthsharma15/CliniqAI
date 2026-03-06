@@ -35,7 +35,7 @@ function speakText(text: string): void {
   }
 }
 
-async function playAudioUrl(url: string): Promise<void> {
+async function playAudioUrl(url: string): Promise<boolean> {
   return new Promise((resolve) => {
     try {
       console.log("📢 Starting audio playback:", url);
@@ -44,37 +44,46 @@ async function playAudioUrl(url: string): Promise<void> {
       audio.volume = 1.0;
       audio.crossOrigin = "anonymous";
 
+      let audioSucceeded = false;
+
       audio.onplay = () => {
-        console.log("▶️  Audio play() called successfully");
+        audioSucceeded = true;
+        console.log("▶️  Audio playing successfully");
       };
 
       audio.onended = () => {
         console.log("✅ Audio playback completed");
-        resolve();
+        resolve(true);
       };
 
       audio.onerror = (e) => {
         console.error("❌ Audio failed to load:", url, e);
-        resolve();
+        resolve(false);
       };
 
       audio.play()
         .then(() => {
+          audioSucceeded = true;
           console.log("▶️  Audio play() promise resolved");
         })
         .catch((err) => {
           console.error("❌ Audio play() failed:", err);
-          resolve();
+          resolve(false);
         });
 
       // Timeout safety - resolve after max duration
       setTimeout(() => {
-        console.log("⏱️  Audio playback timeout (assumed complete)");
-        resolve();
+        if (audioSucceeded) {
+          console.log("⏱️  Audio playback timeout (assumed complete)");
+          resolve(true);
+        } else {
+          console.log("⏱️  Audio timeout - marking as failed");
+          resolve(false);
+        }
       }, 15000);
     } catch (err) {
       console.error("❌ Error creating audio:", err);
-      resolve();
+      resolve(false);
     }
   });
 }
@@ -122,8 +131,20 @@ function SimulateModal({ onClose }: { onClose: () => void }) {
       // Play audio if available, otherwise use text-to-speech fallback
       if (data.audio_urls?.length > 0) {
         console.log("🎵 Playing audio URLs");
+        let audioPlayed = false;
         for (const url of data.audio_urls) {
-          await playAudioUrl(url);
+          const success = await playAudioUrl(url);
+          if (success) {
+            audioPlayed = true;
+            break;
+          }
+        }
+        
+        // If audio failed, use text-to-speech
+        if (!audioPlayed) {
+          console.log("🔊 Audio playback failed, using text-to-speech fallback");
+          speakText(greetingText);
+          await new Promise((r) => setTimeout(r, 2000));
         }
       } else {
         console.log("🔊 No audio URLs, using text-to-speech fallback");
@@ -177,8 +198,20 @@ async function handleSend() {
     // Play audio if available, otherwise use text-to-speech fallback
     if (data.audio_urls?.length > 0) {
       console.log("🎵 Playing audio URLs");
+      let audioPlayed = false;
       for (const url of data.audio_urls) {
-        await playAudioUrl(url);
+        const success = await playAudioUrl(url);
+        if (success) {
+          audioPlayed = true;
+          break;
+        }
+      }
+      
+      // If audio failed, use text-to-speech
+      if (!audioPlayed && data.reply) {
+        console.log("🔊 Audio playback failed, using text-to-speech fallback");
+        speakText(data.reply);
+        await new Promise((r) => setTimeout(r, 1500));
       }
     } else if (data.reply) {
       console.log("🔊 No audio URLs, using text-to-speech fallback");
