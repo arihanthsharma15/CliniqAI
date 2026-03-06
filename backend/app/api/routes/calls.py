@@ -672,6 +672,27 @@ def web_chat(payload: WebChatPayload, db: Session = Depends(get_db)):
     ctx = get_context(call_sid)
     user_msg = payload.message.strip().lower()
 
+    # Handle initial greeting (empty message on first call)
+    if not user_msg and ctx.get("turn_count", 0) == 0:
+        greeting = "Thank you for calling ClinIQ. How can I help you today?"
+        audio_urls = []
+        
+        try:
+            audio_bytes = synthesize_tts(greeting)
+            audio_id = cache_audio(audio_bytes)
+            audio_urls.append(f"{settings.public_base_url}/api/calls/tts/{audio_id}")
+        except Exception as e:
+            logger.error("Failed to synthesize greeting audio: %s", str(e))
+        
+        _append_transcript_line(db, call_sid, "BOT", greeting)
+        increment_turn(call_sid)
+        db.commit()
+        
+        return {
+            "reply": greeting,
+            "audio_urls": audio_urls,
+        }
+
     if any(word in user_msg for word in closing_words) and ctx.get("state") == "POST_TASK":
         goodbye = "Thank you for calling CliniqAI. Goodbye."
 
