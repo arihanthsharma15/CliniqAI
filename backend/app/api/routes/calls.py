@@ -1,3 +1,6 @@
+# =========================================================
+# SUBSYSTEM 1: IMPORTS + GLOBAL CONFIGURATION
+# =========================================================
 import json
 import logging
 import re
@@ -47,6 +50,11 @@ class WebChatPayload(BaseModel):
 router = APIRouter()
 logger = logging.getLogger(__name__)
 CREATE_GENERAL_QUESTION_TASKS = False
+
+
+# =========================================================
+# SUBSYSTEM 2: GLOBAL PATTERNS + RULE ENGINE
+# =========================================================
 
 EMERGENCY_PATTERN = re.compile(
     r"\b("
@@ -149,9 +157,15 @@ CALLBACK_WINDOW_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# =========================================================
+# SUBSYSTEM 3: HELPER UTILITIES (PURE FUNCTIONS)
+# =========================================================
 
 
 
+# ========================================================
+# SUBSYSTEM 3A: STT MODE HELPERS
+# =========================================================
 def _normalized_stt_mode(mode: str | None) -> str:
     candidate = (mode or settings.stt_provider or "deepgram").strip().lower()
 
@@ -182,6 +196,10 @@ def _stream_ws_url(call_sid: str) -> str:
     else:
         ws_base = base
     return f"{ws_base}/api/calls/stream?call_sid={call_sid}"
+
+# =========================================================
+# SUBSYSTEM 3B: EXTRACTION HELPERS
+# =========================================================
 
 
 def _extract_appointment_details(text: str) -> dict[str, str]:
@@ -342,6 +360,11 @@ def _upsert_pending_appointment_details(db: Session, call_sid: str, transcript_t
     return appt_task
 
 
+# =========================================================
+# SUBSYSTEM 3C: ESCALATION HELPERS
+# =========================================================
+
+
 def _escalation_reason(text: str, failed_turns: int) -> str | None:
     if EMERGENCY_PATTERN.search(text):
         return "medical_emergency_keyword"
@@ -359,6 +382,9 @@ def _immediate_escalation_reason(text: str) -> str | None:
         return "requested_human"
     return None
 
+# =========================================================
+# SUBSYSTEM 3D: TASK HELPERS
+# =========================================================
 
 def _load_task_details(raw: str | None) -> dict[str, object]:
     try:
@@ -390,6 +416,10 @@ def _assigned_role_for_request(request_type: str, escalation_reason: str | None 
     return "staff"
 
 
+# =========================================================
+# SUBSYSTEM 3E: TRANSCRIPT HELPERS
+# =========================================================
+
 def _get_or_create_transcript(db: Session, call_sid: str) -> Transcript:
     transcript = (
         db.query(Transcript)
@@ -413,6 +443,7 @@ def _append_transcript_line(db: Session, call_sid: str, speaker: str, text: str)
     transcript.text = f"{transcript.text}\n{line}".strip() if transcript.text else line
 
 
+#3D : TASK HELPERS
 def _create_or_update_intent_task(
     db: Session,
     call_sid: str,
@@ -486,7 +517,7 @@ def _create_or_update_intent_task(
     details["extracted"] = existing_extracted
     matching_task.details = json.dumps(details)
 
-
+#3D : TASK HELPERS
 def _create_escalation_task(
     db: Session,
     call_sid: str,
@@ -543,12 +574,16 @@ def _create_escalation_task(
     )
     queue_task_notification(task, escalation_reason=escalation_reason)
 
-
+#3C : ESCALATION HELPERS
 def _transfer_target_number(escalation_reason: str) -> str | None:
     if escalation_reason == "medical_emergency_keyword":
         return settings.clinic_doctor_number or settings.clinic_staff_number
     return settings.clinic_staff_number
 
+
+# =========================================================
+# SUBSYSTEM 3F: OUTPUT HELPERS
+# =========================================================
 
 def _render_bot_reply_twiml(bot_message: str, callback_url: str, stt_mode: str) -> str:
     try:
@@ -600,6 +635,7 @@ def _appointment_reply(task: Task, callback_number: str | None) -> str:
     )
 
 
+#SUBSYSTEM 3D: TASK HELPERS
 def _callback_window_from_task(task: Task | None) -> str | None:
     if not task:
         return None
@@ -620,6 +656,10 @@ def _callback_window_from_task(task: Task | None) -> str | None:
     return None
 
 
+
+# =========================================================
+# SUBSYSTEM 4: ENTRY ROUTES (SESSION STARTERS)
+# =========================================================
 
 @router.post("/connect")
 def connect_call(
@@ -767,6 +807,10 @@ def web_chat(payload: WebChatPayload, db: Session = Depends(get_db)):
 
 
 
+# =========================================================
+# SUBSYSTEM 5: LIVE CALL ENTRY (TWILIO START)
+# =========================================================
+
 @router.post("/webhook")
 def twilio_webhook(
     CallSid: str = Form(...),
@@ -822,6 +866,11 @@ def twilio_webhook(
     return Response(content=twiml, media_type="application/xml")
 
 
+# =========================================================
+# SUBSYSTEM 6: MAIN CONVERSATION ENGINE (/collect)
+# =========================================================
+
+
 @router.post("/collect")
 def collect_speech(
     CallSid: str = Form(...),
@@ -831,6 +880,11 @@ def collect_speech(
     stt_mode: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
+
+    # ---------------------------------------------------------
+    # 6A: LOAD CONTEXT + STT SOURCE RESOLUTION
+    # ---------------------------------------------------------
+
     ctx = get_context(CallSid)
 
     #  ADDITION 1 — ensure stage always exists
@@ -889,6 +943,11 @@ def collect_speech(
         callback_url = _collect_callback_url(effective_stt_mode)
         logger.warning("stt_fallback switched_to=twilio")
 
+
+    # ---------------------------------------------------------
+    # 6B: EMPTY SPEECH RECOVERY
+    # ---------------------------------------------------------
+
     if not raw_transcript_text:
         last_state = get_context(CallSid).get("state", "GENERAL")
 
@@ -914,6 +973,11 @@ def collect_speech(
 
         return Response(content=twiml, media_type="application/xml")
 
+
+    # ---------------------------------------------------------
+    # 6C: TURN COMMIT + TRANSCRIPT NORMALIZATION
+    # ---------------------------------------------------------
+
     update_context(CallSid, {"no_speech_count": 0})
     increment_turn(CallSid)
     _append_transcript_line(db, CallSid, "USER", raw_transcript_text)
@@ -924,6 +988,9 @@ def collect_speech(
     ctx = get_context(CallSid)
 
 
+    # ---------------------------------------------------------
+    # 6D: IMMEDIATE ESCALATION ENGINE
+    # ---------------------------------------------------------
 
     immediate_escalation = _immediate_escalation_reason(transcript_text)
     if immediate_escalation:
@@ -949,7 +1016,7 @@ def collect_speech(
         flush_call_notifications(CallSid)
         cleanup_context(CallSid)
         logger.info("bot_reply call_sid=%s source=immediate_escalation text=%r", CallSid, bot_message)
-        # Generate TTS for escalation message
+
         try:
             audio_bytes = synthesize_tts(bot_message)
             audio_id = cache_audio(audio_bytes)
@@ -958,6 +1025,7 @@ def collect_speech(
         except Exception as e:
             print(f"DEBUG ESCALATION TTS FAILED = {e}")
             message_audio_url = None
+
         transfer_target = _transfer_target_number(immediate_escalation)
         if transfer_target:
             twiml = hold_and_dial(
@@ -968,11 +1036,16 @@ def collect_speech(
             )
         else:
             twiml = hold_then_hangup(bot_message, hold_seconds=10)
+
         return Response(content=twiml, media_type="application/xml")
 
-   
-    # 1. First, identify what the user wants and extract data
+
+    # ---------------------------------------------------------
+    # 6E: INTENT CLASSIFICATION + FAILURE TRACKING
+    # ---------------------------------------------------------
+
     request_types = infer_request_types(CallSid, transcript_text)
+
     if request_types == ["other"]:
         update_context(CallSid, {
             "other_intent_turns": int(get_context(CallSid).get("other_intent_turns", 0)) + 1
@@ -987,14 +1060,17 @@ def collect_speech(
         bot_message = "I'm having trouble understanding. Let me connect you to our staff."
         _append_transcript_line(db, CallSid, "BOT", bot_message)
         db.commit()
+
         try:
             audio_bytes = synthesize_tts(bot_message)
             audio_id = cache_audio(audio_bytes)
             message_audio_url = f"{settings.public_base_url}/api/calls/tts/{audio_id}"
         except Exception as e:
             message_audio_url = None
+
         flush_call_notifications(CallSid)
         cleanup_context(CallSid)
+
         transfer_target = settings.clinic_staff_number
         if transfer_target:
             twiml = hold_and_dial(
@@ -1005,9 +1081,14 @@ def collect_speech(
             )
         else:
             twiml = hold_then_hangup(bot_message, hold_seconds=10)
+
         return Response(content=twiml, media_type="application/xml")
 
-    
+
+    # ---------------------------------------------------------
+    # 6F: ENTITY EXTRACTION
+    # ---------------------------------------------------------
+
     entities = {}
     extracted = _extract_appointment_details(transcript_text)
 
@@ -1020,21 +1101,31 @@ def collect_speech(
     if extracted.get("preferred_time"):
         entities["time"] = extracted["preferred_time"]
 
-    # 2. Generate the LLM reply FIRST (This updates the state to POST_TASK if finished)
+
+    # ---------------------------------------------------------
+    # 6G: FSM + LLM DECISION CORE
+    # ---------------------------------------------------------
+
     llm_start = perf_counter()
     logger.info("STATE BEFORE LLM = %s", get_context(CallSid).get("state"))
+
     llm_reply, new_state, final_slots = generate_controlled_reply(CallSid, transcript_text)
+
     update_context(CallSid, {
         "state": new_state,
         "slots": final_slots, 
         "last_user_text": transcript_text
     })
+
     latency_ms = int((perf_counter() - llm_start) * 1000)
 
 
-    # 3. NOW check if we should create the task in the database
-    # We check the context AFTER the LLM/State Machine has processed the turn
+    # ---------------------------------------------------------
+    # 6H: TASK PERSISTENCE AFTER SLOT COMPLETION
+    # ---------------------------------------------------------
+
     current_ctx = get_context(CallSid)
+
     if current_ctx.get("state") == "POST_TASK" and not current_ctx.get("task_created"):
         for request_type in request_types:
             _create_or_update_intent_task(
@@ -1043,37 +1134,52 @@ def collect_speech(
                 from_number=From,
                 request_type=request_type,
                 transcript_text=transcript_text,
-                extracted=entities, # Safe to use now!
+                extracted=entities,
             )
         update_context(CallSid, {"task_created": True})
+
     db.commit()
+
+
+    # ---------------------------------------------------------
+    # 6I: AI FAILURE ACCOUNTING
+    # ---------------------------------------------------------
 
     if llm_reply.fallback_used and llm_reply.openai_status.endswith("_empty_output"):
         update_context(
-        CallSid,
-        {"failed_turns": int(get_context(CallSid).get("failed_turns", 0)) + 1},
-    )
+            CallSid,
+            {"failed_turns": int(get_context(CallSid).get("failed_turns", 0)) + 1},
+        )
     else:
         update_context(CallSid, {"failed_turns": 0})
+
     if (
         llm_reply.openai_status.endswith("_request_exception")
         or llm_reply.openai_status.endswith("_empty_output")
         or "_http_" in llm_reply.openai_status
     ):
-       update_context(
-        CallSid,
-        {"ai_failures": int(get_context(CallSid).get("ai_failures", 0)) + 1},
+        update_context(
+            CallSid,
+            {"ai_failures": int(get_context(CallSid).get("ai_failures", 0)) + 1},
         )
     else:
         update_context(CallSid, {"ai_failures": 0})
 
+
+    # ---------------------------------------------------------
+    # 6J: SECONDARY ESCALATION LOGIC
+    # ---------------------------------------------------------
+
     escalation_reason = _escalation_reason(transcript_text, int(get_context(CallSid).get("failed_turns", 0)))
+
     if escalation_reason == "failed_understanding_3_turns" and bool(get_context(CallSid).get("appointment_confirmed")):
         escalation_reason = None
+
     if escalation_reason:
         esc = Escalation(call_sid=CallSid, reason=escalation_reason, details=transcript_text)
         db.add(esc)
         db.flush()
+
         for role in ("staff", "doctor"):
             create_notification(
                 db,
@@ -1085,14 +1191,20 @@ def collect_speech(
                 call_sid=CallSid,
                 escalation_id=esc.id,
             )
+
         if escalation_reason in {"medical_emergency_keyword", "requested_human"}:
             _create_escalation_task(db, CallSid, From, escalation_reason, transcript_text)
+
         db.commit()
+
         update_context(CallSid, {"failed_turns": 0, "ai_failures": 0})
+
         bot_message = "I am having trouble understanding. Let me connect you to our staff."
+
         _append_transcript_line(db, CallSid, "BOT", bot_message)
         db.commit()
         _log_bot_turn_quality(CallSid, bot_message, raw_transcript_text)
+
         logger.info(
             "call_turn call_sid=%s transcript=%r openai_status=%s latency_ms=%s fallback=%s escalated=%s reason=%s",
             CallSid,
@@ -1103,15 +1215,22 @@ def collect_speech(
             True,
             escalation_reason,
         )
+
         return Response(
             content=_render_bot_reply_twiml(bot_message, callback_url, stt_mode=effective_stt_mode),
             media_type="application/xml",
         )
 
+
+    # ---------------------------------------------------------
+    # 6K: FINAL RESPONSE DELIVERY
+    # ---------------------------------------------------------
+
     if int(get_context(CallSid).get("ai_failures", 0)) >= 3:
         esc = Escalation(call_sid=CallSid, reason="ai_service_instability", details=transcript_text)
         db.add(esc)
         db.flush()
+
         for role in ("staff", "doctor"):
             create_notification(
                 db,
@@ -1123,12 +1242,16 @@ def collect_speech(
                 call_sid=CallSid,
                 escalation_id=esc.id,
             )
+
         db.commit()
         update_context(CallSid, {"ai_failures": 0})
+
         bot_message = "I am having technical issues. Say human and I will connect staff."
+
         _append_transcript_line(db, CallSid, "BOT", bot_message)
         db.commit()
         _log_bot_turn_quality(CallSid, bot_message, raw_transcript_text)
+
         return Response(
             content=_render_bot_reply_twiml(bot_message, callback_url, stt_mode=effective_stt_mode),
             media_type="application/xml",
@@ -1152,15 +1275,22 @@ def collect_speech(
             content=_render_bot_hangup_twiml(llm_reply.text),
             media_type="application/xml",
         )
+
     _append_transcript_line(db, CallSid, "BOT", llm_reply.text)
     db.commit()
     _log_bot_turn_quality(CallSid, llm_reply.text, raw_transcript_text)
+
     logger.info("bot_reply call_sid=%s source=llm text=%r", CallSid, llm_reply.text)
+
     return Response(
         content=_render_bot_reply_twiml(llm_reply.text, callback_url, stt_mode=effective_stt_mode),
         media_type="application/xml",
     )
 
+
+# =========================================================
+# SUBSYSTEM 7: AUDIO DELIVERY
+# =========================================================
 
 @router.get("/tts/{audio_id}")
 def tts_audio(audio_id: str):
@@ -1182,6 +1312,11 @@ def tts_audio(audio_id: str):
             "Access-Control-Allow-Headers": "Content-Type"
         }
     )
+
+
+# =========================================================
+# SUBSYSTEM 8: REALTIME AUDIO STREAM BRIDGE
+# =========================================================
 
 @router.websocket("/stream")
 async def twilio_media_stream(websocket: WebSocket) -> None:
